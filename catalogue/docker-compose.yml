@@ -5,7 +5,7 @@ include:
 name: ${INSTANCE_NAME}
 
 services:
-  corepki:
+  coreaccounts:
     image: "replace_me"
     user: "${CONTAINER_UID}:${CONTAINER_GID}"
     x-millegrilles-certificat:
@@ -45,7 +45,7 @@ services:
       - source: mgca
         target: /run/secrets/millegrille.cert.pem
     secrets:
-      - source: core_pki
+      - source: core_accounts
         target: key_cert.pem
       - source: passwd_redis
         target: redis.txt
@@ -57,7 +57,7 @@ configs:
     file: ${MILLEGRILLES_ROOT}/etc/millegrille.pem
 
 secrets:
-  core_pki:
-    file: ${MILLEGRILLES_ROOT}/secrets/corepki.pem
+  core_accounts:
+    file: ${MILLEGRILLES_ROOT}/secrets/coreaccounts.pem
   passwd_redis:
     file: ${MILLEGRILLES_ROOT}/secrets/redis.txt
