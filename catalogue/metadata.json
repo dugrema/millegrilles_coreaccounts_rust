@@ -1,0 +1,8 @@
+{
+  "name": "coreaccounts",
+  "version": "BUILD",
+  "labels": {
+    "en": "Accounts manager for MilleGrilles",
+    "fr": "Gestionnaire de comptes pour MilleGrilles"
+  }
+}
