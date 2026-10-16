@@ -5,12 +5,12 @@ pipeline {
         string(defaultValue: 'master', name: 'BRANCH')
         string(defaultValue: '2026.6', name: 'VERSION')
         string(defaultValue: 'jenkins-maple', name: 'CREDENTIALS_ID')
-        string(defaultValue: 'ssh://git.maple.maceroc.com/git/millegrilles_corepki_rust', name: 'GIT_URL')
-        string(defaultValue: 'registry.millegrilles.com:5000/millegrilles/corepki_rust', name: 'DOCKER_IMAGE')
+        string(defaultValue: 'ssh://git.maple.maceroc.com/git/millegrilles_coreaccounts_rust', name: 'GIT_URL')
+        string(defaultValue: 'registry.millegrilles.com:5000/millegrilles/coreaccounts_rust', name: 'DOCKER_IMAGE')
     }
 
     environment {
-        NOM_APP="millegrilles_documents"
+        NOM_APP="millegrilles_coreaccounts"
         VBUILD="${VERSION}.${BUILD_NUMBER}"
         DOCKER_IMAGE="${params.DOCKER_IMAGE}"
     }
