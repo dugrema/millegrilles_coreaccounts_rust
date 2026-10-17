@@ -18,7 +18,6 @@ use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
 use crate::external::mongo::*;
 use crate::external::webauthn::{prepare_registration, prepare_webauthn_authentication};
-use crate::error::Error as CoreError;
 
 pub async fn process_request<M>(
     config: &dyn ConfigService,
@@ -194,8 +193,8 @@ async fn request_load_user<M>(
 
             let registration_webauthn = prepare_registration(config, mongo, &account_row, hostname).await
                 .map_err(|e| CommonError::String(format!("prepare_registration Error: {:?}", e)))?;
-            response.registration_challenge = match registration_webauthn.webauthn_registration {
-                Some(inner) => Some(inner.registration_challenge),
+            response.registration_challenge = match registration_webauthn.get_registration_challenge() {
+                Some(inner) => Some(inner.to_owned()),
                 None => return outbound.respond(
                     wrapper.delivery_info,
                     ErrorMessage::err_code(500, "Bad challenge format (registration_challenge=None)")

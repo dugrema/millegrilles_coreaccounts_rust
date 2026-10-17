@@ -7,7 +7,6 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::{openssl, uuid};
 use millegrilles_common_rust::v3::ConfigService;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
-use millegrilles_common_rust::millegrilles_cryptographie::ed25519_dalek::ed25519::signature::digest::Mac;
 use millegrilles_common_rust::tracing::{debug, info};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::tokio_stream::StreamExt;
@@ -56,16 +55,17 @@ pub async fn prepare_registration<M>(
 
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChallengeRegistrationWebauthn {
-    pub user_uuid: String,
-    pub registration_challenge: CreationChallengeResponse,
+struct ChallengeRegistrationWebauthn {
+    user_uuid: String,
+    registration_challenge: CreationChallengeResponse,
     /// Secret value, must remain server-side
-    resistration_state: PasskeyRegistration,
+    registration_state: PasskeyRegistration,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ChallengeAuthenticationWebauthn {
-    pub authentication_challenge: RequestChallengeResponse,
+struct ChallengeAuthenticationWebauthn {
+    authentication_challenge: RequestChallengeResponse,
+    /// Private, must not be exposed
     passkey_authentication: PasskeyAuthentication,
 }
 
@@ -80,8 +80,8 @@ pub struct WebauthnChallenge {
     #[serde(rename="_mg-creation", with="FromChrono04DateTime")]
     pub date_creation: DateTime<Utc>,
 
-    /// Pour une registration webauthn
-    pub webauthn_registration: Option<ChallengeRegistrationWebauthn>,
+    /// Pour une registration webauthn (private)
+    webauthn_registration: Option<ChallengeRegistrationWebauthn>,
 
     /// Pour une authentification webauthn (private)
     webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
@@ -101,7 +101,7 @@ impl WebauthnChallenge {
         let webauthn_registration = ChallengeRegistrationWebauthn {
             user_uuid: user_uuid.into(),
             registration_challenge: challenge,
-            resistration_state: registration,
+            registration_state: registration,
         };
 
         let challenge = webauthn_registration.registration_challenge.public_key.challenge.to_string();
@@ -175,26 +175,35 @@ impl WebauthnChallenge {
         }
     }
 
+    /// Accessor to avoid exposing the passkey_authentication (private)
     pub fn get_authentication_challenge(&self) -> Option<&RequestChallengeResponse> {
         match self.webauthn_authentication.as_ref() {
             Some(inner) => Some(&inner.authentication_challenge),
             None => None,
         }
     }
+
+    /// Accessor to avoid exposing the registration_state
+    pub fn get_registration_challenge(&self) -> Option<&CreationChallengeResponse> {
+        match self.webauthn_registration.as_ref() {
+            Some(inner) => Some(&inner.registration_challenge),
+            None => None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CredentialWebauthn {
+struct CredentialWebauthn {
     #[serde(rename="userId")]
-    pub user_id: String,
-    pub hostname: String,
-    pub passkey: Passkey,
+    user_id: String,
+    hostname: String,
+    passkey: Passkey,
     #[serde(skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
-    pub date_creation: Option<DateTime<Utc>>,
+    date_creation: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
-    pub derniere_utilisation: Option<DateTime<Utc>>,
+    derniere_utilisation: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reset_cles: Option<bool>,
+    reset_cles: Option<bool>,
 }
 
 fn generer_challenge_registration(
