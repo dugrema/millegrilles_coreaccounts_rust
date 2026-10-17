@@ -334,3 +334,26 @@ fn build_webauthn(hostname: &str, idmg: &str) -> Result<Webauthn, CoreError> {
     let webauthn = builder.build()?;
     Ok(webauthn)
 }
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PasskeyAuthenticationCred2 {
+    pub cred_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct PasskeyAuthenticationCred {
+    pub cred: PasskeyAuthenticationCred2
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct WebauthnCredentialsRow {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub hostname: String,
+    #[serde(with = "FromChrono04DateTime")]
+    pub date_creation: DateTime<Utc>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
+    pub dernier_auth: Option<DateTime<Utc>>,
+    pub passkey: PasskeyAuthenticationCred,
+}

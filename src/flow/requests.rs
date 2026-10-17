@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::VerificateurPermissions;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats};
 use crate::external::mq::*;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
@@ -16,8 +16,10 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::v3::ConfigService;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
+use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
+use crate::constants::DELEGATION_OWNER;
 use crate::external::mongo::*;
-use crate::external::webauthn::{prepare_registration, prepare_webauthn_authentication};
+use crate::external::webauthn::{prepare_registration, prepare_webauthn_authentication, WebauthnCredentialsRow};
 
 pub async fn process_request<M>(
     config: &dyn ConfigService,
@@ -391,7 +393,60 @@ async fn request_list_admins<M>(
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let _request: RequestUserList = wrapper.message.deserialize()?;
+
+    let filtre = doc! { FIELD_IS_ADMIN: DELEGATION_OWNER };
+    let collection = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
+    let mut curseur = collection
+        .find(filtre)
+        .projection(doc! {
+            FIELD_USERNAME: true,
+            FIELD_USER_ID: true,
+        })
+        .await?;
+
+    let mut accounts: Vec<UserAccountResponse> = Vec::new();
+    while let Some(account) = curseur.next().await {
+        accounts.push(account?.into());
+    }
+
+    let response = ResponseUserList { ok: true, complet: true, usagers: accounts };
+    outbound.respond(wrapper.delivery_info, response).await
+}
+
+#[derive(Deserialize)]
+struct RequestGetUserCookie {
+    user_id: String,
+    hostname: String,
+    challenge: String,
+}
+
+#[derive(Serialize)]
+struct ResponseGetUserCookie {
+    ok: bool,
+    #[serde(rename="nomUsager")]
+    username: String,
+    cookie: CookieSessionResponse,
+}
+
+#[derive(Serialize)]
+pub struct CookieSessionResponse {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+    #[serde(with = "ts_seconds")]
+    pub expiration: DateTime<Utc>,
+}
+
+impl From<CookieSessionRow> for CookieSessionResponse {
+    fn from(value: CookieSessionRow) -> Self {
+        Self {
+            user_id: value.user_id,
+            hostname: value.hostname,
+            challenge: value.challenge,
+            expiration: value.expiration,
+        }
+    }
 }
 
 async fn request_user_cookie<M>(
@@ -399,7 +454,115 @@ async fn request_user_cookie<M>(
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let request: RequestGetUserCookie = wrapper.message.deserialize()?;
+
+    if ! wrapper.certificate.verifier_exchanges(vec![Securite::L1Public, Securite::L2Prive])? ||
+        ! wrapper.certificate.verifier_roles(vec![RolesCertificats::MaitreComptes, RolesCertificats::WebAuth])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await;
+    }
+
+    let filter = doc! {
+        "user_id": request.user_id,
+        "hostname": request.hostname,
+        "challenge": request.challenge,
+    };
+    let collection = mongo.get_collection_typed::<CookieSessionRow>(NOM_COLLECTION_COOKIES)?;
+    let cookie: CookieSessionResponse = match collection.find_one(filter).await? {
+        Some(cookie) => cookie.into(),
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Cookie not found")).await
+    };
+
+    // Get username
+    let filter_user = doc! {FIELD_USER_ID: &cookie.user_id};
+    let collection_users = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
+    let user_account = collection_users
+        .find_one(filter_user)
+        .projection(doc! { FIELD_USERNAME: true, FIELD_USER_ID: true })
+        .await?;
+
+    match user_account {
+        Some(user_account) => {
+            let response = ResponseGetUserCookie { ok: true, username: user_account.nom_usager, cookie };
+            outbound.respond(wrapper.delivery_info, response).await
+        },
+        None => outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "User account not found")).await
+    }
+}
+
+#[derive(Deserialize)]
+struct RequestGetUserPasskeys {
+    #[serde(rename="userId")]
+    user_id: Option<String>,
+}
+
+#[derive(Serialize)]
+struct PasskeyResponse {
+    cred_id: String,
+    hostname: String,
+    #[serde(with="ts_seconds")]
+    date_creation: DateTime<Utc>,
+    #[serde(with="ts_seconds_option")]
+    dernier_auth: Option<DateTime<Utc>>,
+}
+
+impl From<WebauthnCredentialsRow> for PasskeyResponse {
+    fn from(value: WebauthnCredentialsRow) -> Self {
+        let dernier_auth = match value.dernier_auth {
+            Some(inner) => DateTime::from_timestamp(inner.timestamp_millis()/1000, 0),
+            None => None
+        };
+        Self {
+            cred_id: value.passkey.cred.cred_id,
+            hostname: value.hostname,
+            date_creation: DateTime::from_timestamp(value.date_creation.timestamp_millis()/1000, 0).unwrap(),
+            dernier_auth
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ActivationReponse {
+    fingerprint_pk: String,
+    #[serde(with="ts_seconds")]
+    date_creation: DateTime<Utc>,
+}
+
+impl From<ActivationFingerprintPkUsagerRow> for ActivationReponse {
+    fn from(value: ActivationFingerprintPkUsagerRow) -> Self {
+        Self {
+            fingerprint_pk: value.fingerprint_pk,
+            date_creation: value.date_creation,
+        }
+    }
+}
+
+
+#[derive(Serialize)]
+struct CookieReponse {
+    hostname: String,
+    #[serde(with="ts_seconds")]
+    expiration: DateTime<Utc>,
+    #[serde(with="ts_seconds_option")]
+    date_creation: Option<DateTime<Utc>>,
+}
+
+impl From<CookieSessionRow> for CookieReponse {
+    fn from(value: CookieSessionRow) -> Self {
+        Self {
+            hostname: value.hostname,
+            expiration: value.expiration,
+            date_creation: Some(value.date_creation),
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct ResponseGetUserPasskeys {
+    ok: bool,
+    user_id: String,
+    passkeys: Vec<PasskeyResponse>,
+    activations: Vec<ActivationReponse>,
+    cookies: Vec<CookieReponse>
 }
 
 async fn request_user_passkeys<M>(
@@ -407,5 +570,56 @@ async fn request_user_passkeys<M>(
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let request: RequestGetUserPasskeys = wrapper.message.deserialize()?;
+
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(inner) => inner,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await
+    };
+
+    // For admins, allow requesting a different user_id
+    let user_id = match wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        true => match request.user_id {
+            Some(inner) => inner,
+            None => user_id.to_owned()
+        },
+        false => user_id.to_owned()
+    };
+
+    let filter = doc! { FIELD_USER_ID: &user_id };
+    let mut passkeys: Vec<PasskeyResponse> = Vec::new();
+    let collection = mongo.get_collection_typed::<WebauthnCredentialsRow>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let mut curseur = collection.find(filter.clone()).await?;
+    while let Some(cred) = curseur.next().await {
+        let cred = cred?;
+        passkeys.push(cred.into());
+    }
+
+    let activations = {
+        let mut activations: Vec<ActivationReponse> = Vec::new();
+        let collection = mongo.get_collection_typed::<ActivationFingerprintPkUsagerRow>(NOM_COLLECTION_ACTIVATIONS)?;
+        let mut curseur = collection.find(filter).await?;
+        while let Some(activation) = curseur.next().await {
+            let activation = activation?;
+            activations.push(activation.into());
+        }
+        activations
+    };
+
+    let cookies: Vec<CookieReponse> = {
+        let mut cookies = Vec::new();
+        let collection = mongo.get_collection_typed::<CookieSessionRow>(NOM_COLLECTION_COOKIES)?;
+        let filter = doc! { "user_id": &user_id };
+        let mut curseur = collection.find(filter).await?;
+        while let Some(cookie) = curseur.next().await {
+            let cookie = cookie?;
+            debug!("get_passkeys_usager Activation : {:?}", cookie);
+            cookies.push(cookie.into());
+        }
+
+        cookies
+    };
+
+    let reponse = ResponseGetUserPasskeys { ok: true, user_id: user_id.to_owned(), passkeys, activations, cookies };
+    outbound.respond(wrapper.delivery_info, reponse).await
 }

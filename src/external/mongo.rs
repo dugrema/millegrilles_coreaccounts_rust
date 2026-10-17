@@ -167,6 +167,8 @@ pub struct ActivationFingerprintPkUsagerRow {
     #[serde(rename="userId")]
     pub user_id: String,
     pub fingerprint_pk: String,
+    #[serde(with = "FromChrono04DateTime")]
+    pub date_creation: DateTime<Utc>,
     pub certificat: Option<Vec<String>>,
 }
 
@@ -176,4 +178,15 @@ pub struct RecoveryRow {
     pub username: String,
     pub code: String,
     pub csr: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CookieSessionRow {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+    #[serde(with = "FromChrono04DateTime")]
+    pub date_creation: DateTime<Utc>,
+    #[serde(with = "FromChrono04DateTime")]
+    pub expiration: DateTime<Utc>,
 }

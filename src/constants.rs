@@ -8,3 +8,5 @@ pub const EVENEMENT_INSCRIRE_COMPTE_USAGER: &str = "inscrireCompteUsager";
 pub const EVENEMENT_SUPPRIMER_COMPTE_USAGER: &str = "supprimerCompteUsager";
 
 pub const COMMAND_ACTION_SIGN_USER_CSR: &str = "signUserCsr";
+
+pub const DELEGATION_OWNER: &str = "proprietaire";
