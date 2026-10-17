@@ -12,6 +12,7 @@ use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFaca
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
+use millegrilles_common_rust::constantes::DELEGATION_GLOBALE_PROPRIETAIRE;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::multihash::Code;
@@ -37,7 +38,7 @@ pub async fn process_command<M>(
         MessageKind::Commande => {
             match action {
                 COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(config, pki, mongo, outbound, wrapper).await,
-                COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(outbound, wrapper).await,
+                COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(pki, mongo, outbound, wrapper).await,
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, wrapper).await,
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
@@ -120,12 +121,41 @@ async fn sign_user_account<M>(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
-async fn sign_account_by_admin(
+#[derive(Deserialize)]
+struct CommandeSignerCertificatParProprietaire {
+    #[serde(rename="userId")]
+    user_id: String,
+    #[serde(rename="demandeCertificat")]
+    demande_certificat: DemandeSignatureCertificatWebauthn,
+}
+
+async fn sign_account_by_admin<M>(
+    pki: &dyn PkiService,
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+
+    if ! wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await
+    }
+
+    let command: CommandeSignerCertificatParProprietaire = wrapper.message.deserialize()?;
+    let account = match load_user_by_id(mongo, command.user_id.as_str()).await? {
+        Some(account) => account,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    };
+
+    let response = signer_demande_certificat_usager(
+        pki,
+        mongo,
+        outbound,
+        &account,
+        &command.demande_certificat
+    ).await?;
+
+    // Relay the response as-is
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn add_csr_recovery(
