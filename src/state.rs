@@ -21,7 +21,7 @@ use millegrilles_common_rust::v3::impls::messaging_service::MessagingServiceImpl
 use millegrilles_common_rust::v3::impls::security_service::SecurityServiceImpl;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService};
 use std::sync::Arc;
-use crate::external::mongo::COLLECTION_NAME_ACCOUNTS;
+use crate::external::mongo::*;
 
 pub struct AppContext {
     pub join_set: JoinSet<()>,
@@ -65,6 +65,12 @@ impl AppContext {
         // List data tables (excluding redolog and tracking). They get truncated on restore (when not resuming).
         let data_tables = vec![
             COLLECTION_NAME_ACCOUNTS.to_string(),
+            NOM_COLLECTION_RECOVERY.to_string(),
+            NOM_COLLECTION_ACTIVATIONS.to_string(),
+            NOM_COLLECTION_CHALLENGES.to_string(),
+            NOM_COLLECTION_WEBAUTHN_CREDENTIALS.to_string(),
+            NOM_COLLECTION_TOTP_CREDENTIALS.to_string(),
+            NOM_COLLECTION_COOKIES.to_string(),
         ];
         let backup = Arc::new(DomainBackupServiceImpl::new(
             config.clone(),
@@ -72,7 +78,7 @@ impl AppContext {
             outbound.clone(),
             security.clone(),
             mongo.clone(),
-            transaction.transaction.clone(), // SenseursPassifsTransactionService is a wrapper
+            transaction.transaction.clone(),
             filehost.clone(),
             data_tables
         ));

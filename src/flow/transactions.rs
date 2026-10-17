@@ -8,6 +8,7 @@ use millegrilles_common_rust::v3::impls::transaction_service::TransactionService
 use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
 use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
 use std::sync::Arc;
+use crate::external::mq::*;
 
 pub struct AccountsTransactionService {
     pub transaction: Arc<dyn TransactionService>,
@@ -55,48 +56,94 @@ impl TransactionRouter for AccountsTransactionRouter {
         wrapper: TransactionWrapper
     ) -> Result<TransactionOperationAggregator, CommonError> {
         match action.as_str() {
-            // TRANSACTION_ACTION_SAVE_CERTIFICATE | TRANSACTION_ACTION_NEW_CERTIFICATE => {
-            //     save_certificate(self.mongo.as_ref(), wrapper, self.ignore_duplicates).await
-            // },
+            TRANSACTION_INSCRIRE_USAGER => register_user(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_AJOUTER_CLE => add_key(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_MAJ_USAGER_DELEGATIONS => update_user_delegations(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_SUPPRIMER_CLES => delete_keys(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_RESET_WEBAUTHN_USAGER => reset_user_webauthn(self.mongo.as_ref(), wrapper).await,
+            TRANSACTION_REGISTER_OTP => register_otp(self.mongo.as_ref(), wrapper).await,
+
             _ => Err(CommonError::Str("Unknown transaction action"))
         }
     }
 }
 
-// async fn save_certificate(
-//     mongo: &dyn MongoDao,
-//     wrapper: TransactionWrapper,
-//     ignore_duplicates: bool,
-// ) -> Result<TransactionOperationAggregator, CommonError> {
-// 
-//     let certificate: TransactionCertificat = wrapper.message.deserialize()?;
-// 
-//     let mut enveloppe = EnveloppeCertificat::try_from(certificate.pem.as_str())?;
-//     if let Some(ca) = certificate.ca {
-//         enveloppe.millegrille = Some(X509::from_pem(ca.as_bytes())?);
-//     }
-//     let row: CertificateRow = enveloppe.try_into()?;
-// 
-//     let mut aggregator = TransactionOperationAggregator::new();
-//     if ignore_duplicates {
-//         // Support for legacy systems with duplicates on restoration
-//         let collection = mongo.get_collection(COLLECTION_NAME_CERTIFICATES)?;
-//         let filtre_versions = doc! { PKI_DOCUMENT_CHAMP_FINGERPRINT: &row.fingerprint };
-//         let ops = doc!{"$set": bson::serialize_to_bson(&row)?};
-//         let update_model_versions = WriteModel::UpdateOne(
-//             UpdateOneModel::builder()
-//                 .upsert(true)
-//                 .namespace(collection.namespace())
-//                 .filter(filtre_versions)
-//                 .update(ops)
-//                 .build()
-//         );
-//         aggregator.unordered = Some(vec![update_model_versions]);   // This really is just an insert
-//     } else {
-//         // Default behavior, insert and raise Error on record duplication
-//         let doc_row = bson::serialize_to_document(&row)?;
-//         aggregator.batch_insertion(BatchInsertions::new(COLLECTION_NAME_CERTIFICATES, vec![doc_row]))?;
-//     }
-// 
-//     Ok(aggregator)
-// }
+async fn register_user(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+    // let certificate: TransactionCertificat = wrapper.message.deserialize()?;
+    //
+    // let mut enveloppe = EnveloppeCertificat::try_from(certificate.pem.as_str())?;
+    // if let Some(ca) = certificate.ca {
+    //     enveloppe.millegrille = Some(X509::from_pem(ca.as_bytes())?);
+    // }
+    // let row: CertificateRow = enveloppe.try_into()?;
+    //
+    // let mut aggregator = TransactionOperationAggregator::new();
+    // if ignore_duplicates {
+    //     // Support for legacy systems with duplicates on restoration
+    //     let collection = mongo.get_collection(COLLECTION_NAME_CERTIFICATES)?;
+    //     let filtre_versions = doc! { PKI_DOCUMENT_CHAMP_FINGERPRINT: &row.fingerprint };
+    //     let ops = doc!{"$set": bson::serialize_to_bson(&row)?};
+    //     let update_model_versions = WriteModel::UpdateOne(
+    //         UpdateOneModel::builder()
+    //             .upsert(true)
+    //             .namespace(collection.namespace())
+    //             .filter(filtre_versions)
+    //             .update(ops)
+    //             .build()
+    //     );
+    //     aggregator.unordered = Some(vec![update_model_versions]);   // This really is just an insert
+    // } else {
+    //     // Default behavior, insert and raise Error on record duplication
+    //     let doc_row = bson::serialize_to_document(&row)?;
+    //     aggregator.batch_insertion(BatchInsertions::new(COLLECTION_NAME_CERTIFICATES, vec![doc_row]))?;
+    // }
+    //
+    // Ok(aggregator)
+}
+
+async fn add_key(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
+
+async fn update_user_delegations(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
+
+async fn add_signed_delegation(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
+
+async fn delete_keys(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
+
+async fn reset_user_webauthn(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
+
+async fn register_otp(
+    mongo: &dyn MongoDao,
+    wrapper: TransactionWrapper,
+) -> Result<TransactionOperationAggregator, CommonError> {
+    todo!()
+}
