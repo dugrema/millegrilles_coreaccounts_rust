@@ -1,5 +1,5 @@
-pub const DOMAIN_NAME: &str = "CoreAccounts";
-pub const DOMAIN_NAME_OLD: &str = "CoreMaitreDesComptes";
+pub const DOMAIN_NAME: &str = "CoreMaitreDesComptes";
+pub const DOMAIN_NAME_NEW: &str = "CoreAccounts";
 pub const DOMAIN_KEYMASTER: &str = "MaitreDesCles";
 
 pub const EVENEMENT_EVICT_USAGER: &str = "evictUsager";

@@ -45,7 +45,7 @@ pub fn init_queues(mq: &MessagingServiceImpl) -> Result<(), CommonError> {
     // Configure the queues and add to messaging service (will spawn consumer threads)
     mq.add_named_queue(
         ConfigQueueV3 {
-            queue_name: Some(format!("{}/{}", DOMAIN_NAME, QUEUE_TICKER)),
+            queue_name: Some(format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_TICKER)),
             routing_keys: vec![
                 ConfigRoutingExchange { routing_key: "evenement.ceduleur.ping".to_string(), exchange: Securite::L1Public }
             ],
@@ -69,17 +69,17 @@ pub fn init_queues(mq: &MessagingServiceImpl) -> Result<(), CommonError> {
 
     mq.add_named_queue(
         ConfigQueueV3 {
-            queue_name: Some(format!("{}/{}", DOMAIN_NAME, QUEUE_REQUESTS)),
+            queue_name: Some(format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_REQUESTS)),
             routing_keys: vec![
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_CHARGER_USAGER), exchange: Securite::L1Public },
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_COOKIE_USAGER), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_CHARGER_USAGER), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_COOKIE_USAGER), exchange: Securite::L1Public },
 
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_GET_CSR_RECOVERY_PARCODE), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_PASSKEYS_USAGER), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_GET_CSR_RECOVERY_PARCODE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_PASSKEYS_USAGER), exchange: Securite::L2Prive },
 
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_LISTE_USAGERS), exchange: Securite::L3Protege },
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_LISTE_PROPRIETAIRES), exchange: Securite::L3Protege },
-                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME_OLD, REQUETE_USERID_PAR_NOMUSAGER), exchange: Securite::L3Protege },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_LISTE_USAGERS), exchange: Securite::L3Protege },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_LISTE_PROPRIETAIRES), exchange: Securite::L3Protege },
+                ConfigRoutingExchange { routing_key: format!("requete.{}.{}", DOMAIN_NAME, REQUETE_USERID_PAR_NOMUSAGER), exchange: Securite::L3Protege },
             ],
             ttl: Some(QUEUE_TTL_DEFAULT),
             durable: true,
@@ -88,21 +88,21 @@ pub fn init_queues(mq: &MessagingServiceImpl) -> Result<(), CommonError> {
 
     mq.add_named_queue(
         ConfigQueueV3 {
-            queue_name: Some(format!("{}/{}", DOMAIN_NAME, QUEUE_COMMANDS)),
+            queue_name: Some(format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_COMMANDS)),
             routing_keys: vec![
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_AUTHENTIFIER_WEBAUTHN), exchange: Securite::L1Public },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_AUTHENTIFIER_WEBAUTHN), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_AUTHENTIFIER_WEBAUTHN), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_AUTHENTIFIER_WEBAUTHN), exchange: Securite::L2Prive },
 
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_SUPPRIMER_COOKIE), exchange: Securite::L1Public },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_SUPPRIMER_COOKIE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_SUPPRIMER_COOKIE), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_SUPPRIMER_COOKIE), exchange: Securite::L2Prive },
 
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMAND_GENERATE_OTP), exchange: Securite::L1Public },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMAND_AUTHENTICATE_TOTP), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMAND_GENERATE_OTP), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMAND_AUTHENTICATE_TOTP), exchange: Securite::L1Public },
 
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_SIGNER_COMPTEUSAGER), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_AJOUTER_CSR_RECOVERY), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, COMMANDE_GENERER_CHALLENGE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_SIGNER_COMPTEUSAGER), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_AJOUTER_CSR_RECOVERY), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_GENERER_CHALLENGE), exchange: Securite::L2Prive },
             ],
             ttl: Some(QUEUE_TTL_DEFAULT),
             durable: true,
@@ -111,17 +111,17 @@ pub fn init_queues(mq: &MessagingServiceImpl) -> Result<(), CommonError> {
 
     mq.add_named_queue(
         ConfigQueueV3 {
-            queue_name: Some(format!("{}/{}", DOMAIN_NAME, QUEUE_TRANSACTIONS)),
+            queue_name: Some(format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_TRANSACTIONS)),
             routing_keys: vec![
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_REGISTER_OTP), exchange: Securite::L1Public },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_REGISTER_OTP), exchange: Securite::L1Public },
 
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_INSCRIRE_USAGER), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_AJOUTER_CLE), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_AJOUTER_DELEGATION_SIGNEE), exchange: Securite::L2Prive },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_SUPPRIMER_CLES), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_INSCRIRE_USAGER), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_AJOUTER_CLE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_AJOUTER_DELEGATION_SIGNEE), exchange: Securite::L2Prive },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_SUPPRIMER_CLES), exchange: Securite::L2Prive },
 
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_MAJ_USAGER_DELEGATIONS), exchange: Securite::L3Protege },
-                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME_OLD, TRANSACTION_RESET_WEBAUTHN_USAGER), exchange: Securite::L3Protege },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_MAJ_USAGER_DELEGATIONS), exchange: Securite::L3Protege },
+                ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, TRANSACTION_RESET_WEBAUTHN_USAGER), exchange: Securite::L3Protege },
             ],
             ttl: Some(QUEUE_TTL_DEFAULT),
             durable: true,
@@ -129,7 +129,7 @@ pub fn init_queues(mq: &MessagingServiceImpl) -> Result<(), CommonError> {
         })?;
 
     mq.add_named_queue(ConfigQueueV3 {
-        queue_name: Some(format!("{}/{}", DOMAIN_NAME, QUEUE_BACKUP)),
+        queue_name: Some(format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_BACKUP)),
         routing_keys: vec![
             ConfigRoutingExchange { routing_key: format!("requete.{}.getNombreTransactions", DOMAIN_NAME), exchange: Securite::L2Prive },
             ConfigRoutingExchange { routing_key: format!("commande.{}.{}", DOMAIN_NAME, COMMANDE_DECLENCHER_BACKUP), exchange: Securite::L3Protege },
