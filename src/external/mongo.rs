@@ -1,6 +1,12 @@
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
+use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
+use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
+use serde::{Deserialize, Serialize};
+use webauthn_rs::prelude::{CreationChallengeResponse, PasskeyAuthentication, PasskeyRegistration, RequestChallengeResponse};
 
 pub const COLLECTION_NAME_REDOLOG: &str = "CoreAccounts/redolog";
 pub const COLLECTION_NAME_TRACKING: &str = "CoreAccounts/tracking";
@@ -137,4 +143,25 @@ pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> 
     ).await?;
 
     Ok(())
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserAccountRow {
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub compte_prive: Option<bool>,
+    pub delegation_globale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
+    pub delegations_date: Option<DateTime<Utc>>,
+    pub delegations_version: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActivationFingerprintPkUsagerRow {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub fingerprint_pk: String,
+    pub certificat: Option<Vec<String>>,
 }

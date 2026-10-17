@@ -14,3 +14,7 @@ serde = { version = "1.0.229", features = ["derive"] }
 clap = "4.6.7"
 clap_derive = "4.6.7"
 rpassword = "7.5.4"
+
+# Authentication tools
+webauthn-rs = { "version" = "0.4.8", "features" = ["danger-allow-state-serialisation"] }
+totp-rs = { "version" = "5.7.2", features = ["default", "gen_secret", "qr", "serde_support", "zeroize"] }

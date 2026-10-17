@@ -3,6 +3,7 @@ mod flow;
 mod constants;
 mod models;
 mod state;
+mod error;
 
 use clap::Parser;
 use clap_derive::Parser;
