@@ -27,6 +27,7 @@ pub const FIELD_CHALLENGE_TYPE: &str = "type_challenge";
 pub const FIELD_HOSTNAME: &str = "hostname";
 pub const FIELD_CHALLENGE: &str = "challenge";
 pub const FIELD_CORRELATION: &str = "correlation";
+pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(
@@ -122,6 +123,15 @@ pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> 
         vec!(
             ChampIndex {nom_champ: String::from(FIELD_USER_ID), direction: 1},
             ChampIndex {nom_champ: String::from(FIELD_CORRELATION), direction: 1},
+        ),
+        Some(IndexOptions { nom_index: Some(String::from(INDEX_TOTP_UNIQUE)), unique: true })
+    ).await?;
+
+    db.create_index(
+        NOM_COLLECTION_ACTIVATIONS,
+        vec!(
+            ChampIndex {nom_champ: String::from(FIELD_USER_ID), direction: 1},
+            ChampIndex {nom_champ: String::from(FIELD_FINGERPRINT_PK), direction: 1},
         ),
         Some(IndexOptions { nom_index: Some(String::from(INDEX_TOTP_UNIQUE)), unique: true })
     ).await?;
