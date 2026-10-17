@@ -1,8 +1,12 @@
-use millegrilles_common_rust::certificats::VerificateurPermissions;
-use millegrilles_common_rust::{chrono, serde_json};
-use millegrilles_common_rust::chrono::{DateTime, Utc};
+use millegrilles_common_rust::bson;
+use millegrilles_common_rust::bson::doc;
+use crate::external::mongo::*;
 use crate::external::mq::*;
+use crate::external::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, verify_authentication_challenge};
+use crate::flow::certificates::signer_demande_certificat_usager;
 use crate::flow::transactions::AccountsTransactionService;
+use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk};
+use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
@@ -11,15 +15,7 @@ use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
-use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
-use millegrilles_common_rust::constantes::DELEGATION_GLOBALE_PROPRIETAIRE;
-use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
-use millegrilles_common_rust::hachages::hacher_bytes_vu8;
-use millegrilles_common_rust::multihash::Code;
 use serde::{Deserialize, Serialize};
-use crate::external::mongo::load_user_by_id;
-use crate::external::webauthn::{verify_authentication_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn};
-use crate::flow::certificates::signer_demande_certificat_usager;
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -28,7 +24,9 @@ pub async fn process_command<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where M: MongoDaoTyped {
+) -> Result<(), CommonError> where
+    M: MongoDaoTyped,
+{
     let action = match wrapper.get_routing_action() {
         Some(action) => action,
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err("No action provided in command")).await
@@ -39,12 +37,12 @@ pub async fn process_command<M>(
             match action {
                 COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(config, pki, mongo, outbound, wrapper).await,
                 COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(pki, mongo, outbound, wrapper).await,
-                COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, wrapper).await,
+                COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, mongo, wrapper).await,
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(outbound, wrapper).await,
                 COMMAND_GENERATE_OTP => generate_otp(outbound, wrapper).await,
-                COMMANDE_SUPPRIMER_COOKIE => delete_cookie(outbound, wrapper).await,
+                COMMANDE_SUPPRIMER_COOKIE => delete_cookie(mongo, outbound, wrapper).await,
                 _ => {
                     info!("Unknown action {} for process_command, skipping", action);
                     Ok(())
@@ -158,12 +156,56 @@ async fn sign_account_by_admin<M>(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
+#[derive(Deserialize)]
+struct CommandeAjouterCsrRecovery {
+    csr: String,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+}
+
+#[derive(Serialize)]
+struct ResponseAjouterCsrRecovery {
+    ok: bool,
+    code: String,
+}
+
 async fn add_csr_recovery(
     outbound: &MessageOutboundFacade,
+    mongo: &dyn MongoDao,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+    let command: CommandeAjouterCsrRecovery = wrapper.message.deserialize()?;
+
+    // Charger CSR et calculer fingerprint, code.
+    let csr_parsed = charger_csr(command.csr.as_str())?;
+    let csr_subject = get_csr_subject(&csr_parsed.as_ref())?;
+    if csr_subject.get("commonName").is_none() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Missing common name")).await
+    };
+
+    let cle_publique = csr_parsed.public_key()?;
+    let fingerprint = calculer_fingerprint_pk(&cle_publique)?;
+    let len_fingerprint = fingerprint.len();
+    let fingerprint_lc = fingerprint.to_lowercase();
+    let code_part1 = &fingerprint_lc[len_fingerprint - 8..len_fingerprint - 4];
+    let code_part2 = &fingerprint_lc[len_fingerprint - 4..len_fingerprint];
+    let code = format!("{}-{}", code_part1, code_part2);
+    debug!("Code : {}", code);
+
+    let filtre = doc! {
+        "code": &code,
+        "nomUsager": &command.nom_usager,
+    };
+    let ops = doc! {
+        "$set": { "csr": &command.csr },
+        "$setOnInsert": { FIELD_DATE_CREATED: bson::datetime::DateTime::now() },
+        "$currentDate": { FIELD_DATE_MODIFIED: true },
+    };
+    let collection = mongo.get_collection(NOM_COLLECTION_RECOVERY)?;
+    let _resultat = collection.update_one(filtre, ops).upsert(true).await?;
+
+    let response = ResponseAjouterCsrRecovery { ok: true, code };
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn authenticate_webauthn(
@@ -198,12 +240,33 @@ async fn generate_otp(
     // let command: DemandeSignature = wrapper.message.deserialize()?;
 }
 
+#[derive(Deserialize)]
+pub struct CommandDeleteCookie {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+}
+
 async fn delete_cookie(
+    mongo: &dyn MongoDao,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+    let command: CommandDeleteCookie = wrapper.message.deserialize()?;
+
+    if ! wrapper.certificate.verifier_exchanges(vec![Securite::L3Protege, Securite::L2Prive, Securite::L1Public])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await
+    }
+
+    let filtre = doc!{
+        "user_id": command.user_id,
+        "hostname": command.hostname,
+        "challenge": command.challenge,
+    };
+    let collection = mongo.get_collection(NOM_COLLECTION_COOKIES)?;
+    collection.delete_one(filtre).await?;
+
+    outbound.respond(wrapper.delivery_info, ErrorMessage::ok()).await
 }
 
 
