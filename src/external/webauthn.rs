@@ -7,6 +7,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::{openssl, uuid};
 use millegrilles_common_rust::v3::ConfigService;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
+use millegrilles_common_rust::millegrilles_cryptographie::ed25519_dalek::ed25519::signature::digest::Mac;
 use millegrilles_common_rust::tracing::{debug, info};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::tokio_stream::StreamExt;
@@ -65,7 +66,7 @@ pub struct ChallengeRegistrationWebauthn {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChallengeAuthenticationWebauthn {
     pub authentication_challenge: RequestChallengeResponse,
-    pub passkey_authentication: PasskeyAuthentication,
+    passkey_authentication: PasskeyAuthentication,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -83,7 +84,7 @@ pub struct WebauthnChallenge {
     pub webauthn_registration: Option<ChallengeRegistrationWebauthn>,
 
     /// Pour une authentification webauthn (private)
-    pub webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
+    webauthn_authentication: Option<ChallengeAuthenticationWebauthn>,
 
     /// TOTP configuration
     pub totp_url_encrypted: Option<EncryptedDocument>,
@@ -171,6 +172,13 @@ impl WebauthnChallenge {
             webauthn_registration: None,
             webauthn_authentication: None,
             totp_url_encrypted: Some(encrypted_url)
+        }
+    }
+
+    pub fn get_authentication_challenge(&self) -> Option<&RequestChallengeResponse> {
+        match self.webauthn_authentication.as_ref() {
+            Some(inner) => Some(&inner.authentication_challenge),
+            None => None,
         }
     }
 }

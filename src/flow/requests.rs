@@ -206,10 +206,10 @@ async fn request_load_user<M>(
                 match prepare_webauthn_authentication(config, mongo, &account_row, hostname).await?
                 {
                     Some(doc_challenge) => {
-                        match doc_challenge.webauthn_authentication {
+                        match doc_challenge.get_authentication_challenge() {
                             Some(inner) => {
                                 // Dropping the passkey_authentication, it must not be sent as a response (private)
-                                (None, Some(inner.authentication_challenge))
+                                (None, Some(inner.to_owned()))
                             },
                             None => (Some(doc_challenge.challenge), None)
                         }
