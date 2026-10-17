@@ -124,6 +124,7 @@ impl ApplicationService {
                 Ok(message) => {
                     if let Err(e) = process_events(
                         self.config.as_ref(),
+                        self.chiffrage.as_ref(),
                         self.outbound.as_ref(),
                         message,
                     ).await {
