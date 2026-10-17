@@ -38,7 +38,7 @@ pub async fn process_request<M>(
                 REQUETE_CHARGER_USAGER => request_load_user(config, mongo, outbound, wrapper).await,
                 REQUETE_LISTE_USAGERS => request_list_users(mongo, outbound, wrapper).await,
                 REQUETE_USERID_PAR_NOMUSAGER => request_userid_by_username(mongo, outbound, wrapper).await,
-                REQUETE_GET_CSR_RECOVERY_PARCODE => request_get_csr_recovery_passcode(mongo, outbound, wrapper).await,
+                REQUETE_GET_CSR_RECOVERY_PARCODE => request_get_csr_recovery_bycode(mongo, outbound, wrapper).await,
                 REQUETE_LISTE_PROPRIETAIRES => request_list_admins(mongo, outbound, wrapper).await,
                 REQUETE_COOKIE_USAGER => request_user_cookie(mongo, outbound, wrapper).await,
                 REQUETE_PASSKEYS_USAGER => request_user_passkeys(mongo, outbound, wrapper).await,
@@ -55,7 +55,7 @@ pub async fn process_request<M>(
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Deserialize)]
 struct RequestLoaduser {
     /// User_id, utilise de preference.
     #[serde(rename="userId")]
@@ -71,7 +71,7 @@ struct RequestLoaduser {
     host_url: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct UserAccountResponse {
     #[serde(rename="nomUsager")]
     pub nom_usager: String,
@@ -97,7 +97,7 @@ impl From<UserAccountRow> for UserAccountResponse {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct ResponseLoaduser {
     ok: bool,
     err: Option<String>,
@@ -235,12 +235,60 @@ async fn request_load_user<M>(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
+#[derive(Deserialize)]
+struct RequestUserList {
+    liste_userids: Option<Vec<String>>,
+    nom_masque_debut: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ResponseUserList {
+    ok: bool,
+    complet: bool,
+    usagers: Vec<UserAccountResponse>,
+}
+
 async fn request_list_users<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let request: RequestUserList = wrapper.message.deserialize()?;
+
+    let mut filtre = doc! {};
+    if let Some(userids) = &request.liste_userids {
+        filtre.insert(FIELD_USER_ID, doc!{"$in": userids});
+    }
+
+    let collection = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
+    let mut curseur = collection
+        .find(filtre)
+        .projection(doc!{
+            FIELD_USERNAME: true,
+            FIELD_USER_ID: true,
+            FIELD_PRIVATE_ACCOUNT: true,
+            FIELD_IS_ADMIN: true,
+        })
+        .await?;
+
+    let mut users: Vec<UserAccountResponse> = Vec::new();
+    while let Some(account) = curseur.next().await {
+        users.push(account?.into());
+    }
+
+    let response = ResponseUserList { ok: true, complet: true, usagers: users };
+    outbound.respond(wrapper.delivery_info, response).await
+}
+
+#[derive(Deserialize)]
+struct RequestUserIdByUsername {
+    noms_usagers: Vec<String>,
+}
+
+#[derive(Serialize)]
+struct ResponseUserIdByUsername {
+    ok: bool,
+    usagers: HashMap<String, Option<String>>,
 }
 
 async fn request_userid_by_username<M>(
@@ -248,15 +296,94 @@ async fn request_userid_by_username<M>(
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let request: RequestUserIdByUsername = wrapper.message.deserialize()?;
+
+    // Inserer tous les nom_usagers demandes avec None. Assurer de retourner la reponse complete
+    // si certains usagers sont inconnus.
+    let mut users: HashMap<String, Option<String>> = HashMap::new();
+    for nom_usager in &request.noms_usagers {
+        users.insert(nom_usager.into(), None);
+    }
+
+    let filtre = doc! { FIELD_USERNAME: {"$in": request.noms_usagers}};
+    debug!("get_userid_par_nomusager Requete noms usagers, filtre : {:?}", filtre);
+    let collection = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
+    let mut curseur = collection
+        .find(filtre)
+        .projection(doc! {
+            FIELD_USERNAME: true,
+            FIELD_USER_ID: true,
+        })
+        .await?;
+
+    while let Some(account) = curseur.next().await {
+        let account = account?;
+        users.insert(account.nom_usager.clone(), Some(account.user_id.clone()));
+    }
+
+    let response = ResponseUserIdByUsername { ok: true, usagers: users };
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
-async fn request_get_csr_recovery_passcode<M>(
+
+#[derive(Deserialize)]
+struct RequestCsrRecoveryByCode {
+    nom_usager: Option<String>,
+    code: String,
+}
+
+#[derive(Serialize)]
+struct ResponseCsrRecoveryByCode {
+    ok: bool,
+    #[serde(rename="nomUsager")]
+    nom_usager: String,
+    code: String,
+    csr: String,
+}
+
+async fn request_get_csr_recovery_bycode<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!();
+    let request: RequestCsrRecoveryByCode = wrapper.message.deserialize()?;
+
+    // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
+    let collection_accounts = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
+    let effective_username = match (request.nom_usager, wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?) {
+        (Some(username), true) => username,
+        _ => match wrapper.certificate.get_user_id()? {
+            Some(user_id) => {
+                let filtre = doc! { FIELD_USER_ID: &user_id };
+                match collection_accounts.find_one(filtre).await? {
+                    Some(account) => account.nom_usager,
+                    None => {
+                        // Access refused, unknown username
+                        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await;
+                    }
+                }
+            },
+            None => {
+                // Access refused, wrong certificate (user_id property is required)
+                return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await;
+            }
+        },
+    };
+
+    let filtre = doc! { FIELD_USERNAME: &effective_username, FIELD_CODE: &request.code };
+    let collection_recovery = mongo.get_collection_typed::<RecoveryRow>(NOM_COLLECTION_RECOVERY)?;
+    match collection_recovery.find_one(filtre).await? {
+        Some(row) => {
+            let response = ResponseCsrRecoveryByCode {
+                ok: true,
+                nom_usager: effective_username,
+                code: request.code,
+                csr: row.csr
+            };
+            outbound.respond(wrapper.delivery_info, response).await
+        },
+        None => outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "No match found")).await
+    }
 }
 
 async fn request_list_admins<M>(

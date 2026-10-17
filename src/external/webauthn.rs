@@ -40,7 +40,7 @@ pub async fn prepare_registration<M>(
             let (challenge, registration) = generer_challenge_registration(
                 rp_origin.as_str(), nom_usager, &user_uuid, idmg.as_str(), None::<&Vec<&str>>, // existing_credentials
             )?;
-            let doc_registration = WebauthnChallenge::new_challenge_resgistration(
+            let doc_registration = WebauthnChallenge::new_challenge_registration(
                 user_id, user_uuid.as_str(), hostname, challenge, registration);
 
             // Save registration challenge
@@ -53,8 +53,7 @@ pub async fn prepare_registration<M>(
     Ok(doc_registration)
 }
 
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ChallengeRegistrationWebauthn {
     user_uuid: String,
     registration_challenge: CreationChallengeResponse,
@@ -62,14 +61,14 @@ struct ChallengeRegistrationWebauthn {
     registration_state: PasskeyRegistration,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 struct ChallengeAuthenticationWebauthn {
     authentication_challenge: RequestChallengeResponse,
     /// Private, must not be exposed
     passkey_authentication: PasskeyAuthentication,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct WebauthnChallenge {
     #[serde(rename="userId")]
     pub user_id: String,
@@ -91,7 +90,7 @@ pub struct WebauthnChallenge {
 }
 
 impl WebauthnChallenge {
-    pub fn new_challenge_resgistration(
+    pub fn new_challenge_registration(
         user_id: &str,
         user_uuid: &str,
         hostname: &str,

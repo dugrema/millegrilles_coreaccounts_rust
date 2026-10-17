@@ -28,12 +28,16 @@ pub const INDEX_TOTP_UNIQUE: &str = "totp_unique";
 
 pub const FIELD_USER_ID: &str = "userId";
 pub const FIELD_USERNAME: &str = "nomUsager";
+pub const FIELD_PRIVATE_ACCOUNT: &str = "compte_prive";
+pub const FIELD_IS_ADMIN: &str = "delegation_globale";
 pub const FIELD_CODE: &str = "code";
 pub const FIELD_CHALLENGE_TYPE: &str = "type_challenge";
 pub const FIELD_HOSTNAME: &str = "hostname";
 pub const FIELD_CHALLENGE: &str = "challenge";
 pub const FIELD_CORRELATION: &str = "correlation";
 pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
+
+
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(
@@ -164,4 +168,12 @@ pub struct ActivationFingerprintPkUsagerRow {
     pub user_id: String,
     pub fingerprint_pk: String,
     pub certificat: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoveryRow {
+    #[serde(rename="nomUsager")]
+    pub username: String,
+    pub code: String,
+    pub csr: String,
 }

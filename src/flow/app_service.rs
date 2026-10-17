@@ -92,7 +92,7 @@ impl ApplicationService {
     
     async fn process_ticker_thread(&self, incoming: Arc<MessageInboundValidator>) {
         let streamer = incoming.consume_named_queue(
-            format!("{}/{}", DOMAIN_NAME, QUEUE_TICKER).as_str(),
+            format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_TICKER).as_str(),
         ).expect("Consumer streaming init failed");
         tokio::pin!(streamer);
         while let Some(result) = streamer.next().await {
@@ -142,7 +142,7 @@ impl ApplicationService {
     // Requests
     async fn process_requests_thread(&self, incoming: Arc<MessageInboundValidator>) {
         let streamer = incoming.consume_named_queue(
-            format!("{}/{}", DOMAIN_NAME, QUEUE_REQUESTS).as_str(),
+            format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_REQUESTS).as_str(),
         ).expect("Consumer streaming init failed");
         tokio::pin!(streamer);
         while let Some(result) = streamer.next().await {
@@ -168,7 +168,7 @@ impl ApplicationService {
 
     async fn process_commands_thread(&self, incoming: Arc<MessageInboundValidator>) {
         let streamer = incoming.consume_named_queue(
-            format!("{}/{}", DOMAIN_NAME, QUEUE_COMMANDS).as_str(),
+            format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_COMMANDS).as_str(),
         ).expect("Consumer streaming init failed");
         tokio::pin!(streamer);
         while let Some(result) = streamer.next().await {
@@ -194,7 +194,7 @@ impl ApplicationService {
     // Transactions
     async fn process_transaction_thread(&self, incoming: Arc<MessageInboundValidator>) {
         let streamer = incoming.consume_named_queue(
-            format!("{}/{}", DOMAIN_NAME, QUEUE_TRANSACTIONS).as_str(),
+            format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_TRANSACTIONS).as_str(),
         ).expect("Consumer streaming init failed");
         tokio::pin!(streamer);
         while let Some(result) = streamer.next().await {
@@ -220,7 +220,7 @@ impl ApplicationService {
 
     async fn process_backup_thread(&self, incoming: Arc<MessageInboundValidator>) {
         let streamer = incoming.consume_named_queue(
-            format!("{}/{}", DOMAIN_NAME, QUEUE_BACKUP).as_str(),
+            format!("{}/{}", DOMAIN_NAME_NEW, QUEUE_BACKUP).as_str(),
         ).expect("Consumer streaming init failed");
         tokio::pin!(streamer);
         while let Some(result) = streamer.next().await {
@@ -253,7 +253,7 @@ impl ApplicationService {
 
         let start_time = Utc::now();
         let result = self.backup.restore_domain(
-            DOMAIN_NAME,
+            DOMAIN_NAME_NEW,
             COLLECTION_NAME_REDOLOG,
             COLLECTION_NAME_TRACKING,
             resume,
