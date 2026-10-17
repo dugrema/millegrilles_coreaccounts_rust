@@ -240,7 +240,7 @@ async fn request_load_user<M>(
 #[derive(Deserialize)]
 struct RequestUserList {
     liste_userids: Option<Vec<String>>,
-    nom_masque_debut: Option<String>,
+    // nom_masque_debut: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -531,7 +531,7 @@ impl From<ActivationFingerprintPkUsagerRow> for ActivationReponse {
     fn from(value: ActivationFingerprintPkUsagerRow) -> Self {
         Self {
             fingerprint_pk: value.fingerprint_pk,
-            date_creation: value.date_creation,
+            date_creation: value.created,
         }
     }
 }
@@ -551,7 +551,7 @@ impl From<CookieSessionRow> for CookieReponse {
         Self {
             hostname: value.hostname,
             expiration: value.expiration,
-            date_creation: Some(value.date_creation),
+            date_creation: Some(value.created),
         }
     }
 }

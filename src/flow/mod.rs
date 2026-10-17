@@ -6,3 +6,4 @@ pub mod transactions;
 mod commands;
 mod requests;
 mod events;
+mod certificates;

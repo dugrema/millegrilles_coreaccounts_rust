@@ -1,3 +1,5 @@
+use millegrilles_common_rust::bson;
+use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::constantes::*;
 use millegrilles_common_rust::error::Error as CommonError;
@@ -36,7 +38,8 @@ pub const FIELD_HOSTNAME: &str = "hostname";
 pub const FIELD_CHALLENGE: &str = "challenge";
 pub const FIELD_CORRELATION: &str = "correlation";
 pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
-
+pub const FIELD_DATE_CREATED: &str = "created";
+pub const FIELD_DATE_MODIFIED: &str = "last_modified";
 
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
@@ -168,7 +171,7 @@ pub struct ActivationFingerprintPkUsagerRow {
     pub user_id: String,
     pub fingerprint_pk: String,
     #[serde(with = "FromChrono04DateTime")]
-    pub date_creation: DateTime<Utc>,
+    pub created: DateTime<Utc>,
     pub certificat: Option<Vec<String>>,
 }
 
@@ -186,7 +189,16 @@ pub struct CookieSessionRow {
     pub hostname: String,
     pub challenge: String,
     #[serde(with = "FromChrono04DateTime")]
-    pub date_creation: DateTime<Utc>,
+    pub created: DateTime<Utc>,
     #[serde(with = "FromChrono04DateTime")]
     pub expiration: DateTime<Utc>,
+}
+
+pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Option<UserAccountRow>, CommonError> {
+    let filtre = doc! { FIELD_USER_ID: user_id };
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    match collection.find_one(filtre).await? {
+        Some(c) => Ok(Some(bson::deserialize_from_document(c)?)),
+        None => Ok(None)
+    }
 }

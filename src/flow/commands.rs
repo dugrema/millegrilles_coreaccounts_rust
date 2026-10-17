@@ -1,19 +1,33 @@
+use millegrilles_common_rust::certificats::VerificateurPermissions;
+use millegrilles_common_rust::{chrono, serde_json};
+use millegrilles_common_rust::chrono::{DateTime, Utc};
 use crate::external::mq::*;
 use crate::flow::transactions::AccountsTransactionService;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
-use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
-use millegrilles_common_rust::tracing::info;
+use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
+use millegrilles_common_rust::tracing::{debug, error, info};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
-use millegrilles_common_rust::v3::{ChiffrageService, PkiService};
+use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
+use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
+use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
+use millegrilles_common_rust::hachages::hacher_bytes_vu8;
+use millegrilles_common_rust::multihash::Code;
+use serde::{Deserialize, Serialize};
+use crate::external::mongo::load_user_by_id;
+use crate::external::webauthn::{verify_authentication_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn};
+use crate::flow::certificates::signer_demande_certificat_usager;
 
-pub async fn process_command(
+pub async fn process_command<M>(
+    config: &dyn ConfigService,
+    pki: &dyn PkiService,
     chiffrage: &dyn ChiffrageService,
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
+) -> Result<(), CommonError> where M: MongoDaoTyped {
     let action = match wrapper.get_routing_action() {
         Some(action) => action,
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err("No action provided in command")).await
@@ -22,7 +36,7 @@ pub async fn process_command(
     match wrapper.message.kind {
         MessageKind::Commande => {
             match action {
-                COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(outbound, wrapper).await,
+                COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(config, pki, mongo, outbound, wrapper).await,
                 COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(outbound, wrapper).await,
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, wrapper).await,
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(outbound, wrapper).await,
@@ -45,12 +59,65 @@ pub async fn process_command(
 
 }
 
-async fn sign_user_account(
+#[derive(Clone, Debug, Deserialize)]
+struct CommandSignCertificate {
+    #[serde(rename="demandeCertificat")]
+    demande_certificat: DemandeSignatureCertificatWebauthn,
+
+    // Champs pour demande de signature avec preuve webauthn
+    challenge: String,
+    hostname: String,
+
+    /// Reponse webauthn
+    #[serde(rename="clientAssertionResponse")]
+    client_assertion_response: ClientAssertionResponse,
+}
+
+async fn sign_user_account<M>(
+    config: &dyn ConfigService,
+    pki: &dyn PkiService,
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+    let command: CommandSignCertificate = wrapper.message.deserialize()?;
+
+    let account = match wrapper.certificate.get_user_id()? {
+        Some(user_id) => match load_user_by_id(mongo, user_id.as_str()).await? {
+            Some(account) => account,
+            None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown account")).await
+        },
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "No user ID provided in command")).await
+    };
+
+    let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
+
+    match verify_authentication_challenge(
+        mongo,
+        account.user_id.as_str(),
+        command.hostname.as_str(),
+        command.challenge.as_str(),
+        idmg.as_str(),
+        &command.demande_certificat,
+        command.client_assertion_response,
+    ).await {
+        Ok(_inner) => (),  // Ok, no error
+        Err(e) => {
+            error!("verify_authentication_challenge Error: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Error verifying the signature")).await
+        }
+    }
+
+    let response = signer_demande_certificat_usager(
+        pki,
+        mongo,
+        outbound,
+        &account,
+        &command.demande_certificat
+    ).await?;
+
+    // Relay the response as-is
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn sign_account_by_admin(

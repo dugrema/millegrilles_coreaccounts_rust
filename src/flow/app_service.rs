@@ -176,7 +176,10 @@ impl ApplicationService {
                 Ok(message) => {
                     let routing = message.message.routage.clone();
                     if let Err(e) = process_command(
+                        self.config.as_ref(),
+                        self.pki.as_ref(),
                         self.chiffrage.as_ref(),
+                        self.mongo.as_ref(),
                         self.outbound.as_ref(),
                         message
                     ).await {

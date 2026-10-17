@@ -4,14 +4,20 @@ use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::jwt_simple::prelude::{Deserialize, Serialize};
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
-use millegrilles_common_rust::{openssl, uuid};
+use millegrilles_common_rust::{chrono, openssl, serde_json, uuid};
 use millegrilles_common_rust::v3::ConfigService;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
+use millegrilles_common_rust::common_messages::DemandeSignature;
+use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
+use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::tracing::{debug, info};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, RequestChallengeResponse};
+use millegrilles_common_rust::multihash::Code;
+use millegrilles_common_rust::serde_json::{json, Value};
+use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
+use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RequestChallengeResponse};
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 use crate::external::mongo::*;
 use crate::error::Error as CoreError;
@@ -21,7 +27,7 @@ pub async fn prepare_registration<M>(
     mongo: &M,
     compte: &UserAccountRow,
     hostname: &str
-) -> Result<WebauthnChallenge, CoreError> where M: MongoDaoTyped {
+) -> Result<WebauthnChallengeRow, CoreError> where M: MongoDaoTyped {
     let hostname = hostname.as_ref();
     let rp_origin = format!("https://{}/", hostname);
     let user_id = compte.user_id.as_str();
@@ -33,14 +39,14 @@ pub async fn prepare_registration<M>(
         FIELD_CHALLENGE_TYPE: "registration",
         FIELD_HOSTNAME: &hostname,
     };
-    let collection = mongo.get_collection_typed::<WebauthnChallenge>(NOM_COLLECTION_CHALLENGES)?;
-    let doc_registration: WebauthnChallenge = match collection.find_one(filtre).await? {
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let doc_registration: WebauthnChallengeRow = match collection.find_one(filtre).await? {
         Some(inner) => inner,
         None => {
             let (challenge, registration) = generer_challenge_registration(
                 rp_origin.as_str(), nom_usager, &user_uuid, idmg.as_str(), None::<&Vec<&str>>, // existing_credentials
             )?;
-            let doc_registration = WebauthnChallenge::new_challenge_registration(
+            let doc_registration = WebauthnChallengeRow::new_challenge_registration(
                 user_id, user_uuid.as_str(), hostname, challenge, registration);
 
             // Save registration challenge
@@ -69,7 +75,7 @@ struct ChallengeAuthenticationWebauthn {
 }
 
 #[derive(Serialize, Deserialize)]
-pub struct WebauthnChallenge {
+pub struct WebauthnChallengeRow {
     #[serde(rename="userId")]
     pub user_id: String,
     pub type_challenge: String,
@@ -89,7 +95,7 @@ pub struct WebauthnChallenge {
     pub totp_url_encrypted: Option<EncryptedDocument>,
 }
 
-impl WebauthnChallenge {
+impl WebauthnChallengeRow {
     pub fn new_challenge_registration(
         user_id: &str,
         user_uuid: &str,
@@ -267,7 +273,7 @@ pub async fn prepare_webauthn_authentication<M>(
     mongo: &M,
     compte: &UserAccountRow,
     hostname: &str
-) -> Result<Option<WebauthnChallenge>, CommonError> where M: MongoDaoTyped {
+) -> Result<Option<WebauthnChallengeRow>, CommonError> where M: MongoDaoTyped {
     let hostname = hostname.as_ref();
     let user_id = compte.user_id.as_str();
     let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
@@ -289,7 +295,7 @@ pub async fn prepare_webauthn_authentication<M>(
             let challenge = buffer_random.to_vec();
             Base64UrlSafeData::from(challenge)
         };
-        WebauthnChallenge::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
+        WebauthnChallengeRow::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
 
     } else {
         let (challenge, passkey_authentication) = match generer_challenge_authentification(
@@ -298,11 +304,11 @@ pub async fn prepare_webauthn_authentication<M>(
             Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("preparer_authentification_webauthn Erreur {:?}", e)))?
         };
 
-        WebauthnChallenge::new_challenge_authentication(user_id, hostname, challenge, passkey_authentication)
+        WebauthnChallengeRow::new_challenge_authentication(user_id, hostname, challenge, passkey_authentication)
     };
 
     // Sauvegarder challenge
-    let collection = mongo.get_collection_typed::<WebauthnChallenge>(NOM_COLLECTION_CHALLENGES)?;
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
     collection.insert_one(&doc_challenge).await?;
 
     Ok(Some(doc_challenge))
@@ -356,4 +362,175 @@ pub struct WebauthnCredentialsRow {
     #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
     pub dernier_auth: Option<DateTime<Utc>>,
     pub passkey: PasskeyAuthenticationCred,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientAssertResponseContent {
+    #[serde(rename="authenticatorData")]
+    pub authenticator_data: Base64UrlSafeData,
+    #[serde(rename="clientDataJSON")]
+    pub client_data_json: Base64UrlSafeData,
+    #[serde(rename="signature")]
+    pub signature: Base64UrlSafeData,
+    #[serde(rename="userHandle")]
+    pub user_handle: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ClientAssertionResponse {
+    pub id64: Base64UrlSafeData,
+    pub response: ClientAssertResponseContent
+}
+
+impl TryInto<PublicKeyCredential> for ClientAssertionResponse {
+    type Error = millegrilles_common_rust::error::Error;
+
+    fn try_into(self) -> Result<PublicKeyCredential, Self::Error> {
+        let id_b64 = &self.id64;
+        let response = &self.response;
+
+        let val = json!({
+            "id": id_b64,
+            "rawId": id_b64,
+            "response": {
+                "authenticatorData": &response.authenticator_data,
+                "clientDataJSON": response.client_data_json,
+                "signature": response.signature,
+                "userHandle": &response.user_handle
+            },
+            "type": "public-key"
+        });
+
+        Ok(serde_json::from_value(val)?)
+    }
+}
+
+/// Contains private information - must not leave this module
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PasskeyAuthenticationStateAjuste {
+    credentials: Value,
+    policy: Value,
+    challenge: Base64UrlSafeData,
+    appid: Option<String>,
+    allow_backup_eligible_upgrade: bool
+}
+
+/// Contains private information - must not leave this module
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct PasskeyAuthenticationAjuste {
+    ast: PasskeyAuthenticationStateAjuste,
+}
+
+impl TryInto<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
+    type Error = millegrilles_common_rust::error::Error;
+
+    fn try_into(self) -> Result<PasskeyAuthentication, Self::Error> {
+        let value = serde_json::to_value(self)?;
+        Ok(serde_json::from_value(value)?)
+    }
+}
+
+impl TryFrom<PasskeyAuthentication> for PasskeyAuthenticationAjuste {
+    type Error = millegrilles_common_rust::error::Error;
+
+    fn try_from(value: PasskeyAuthentication) -> Result<Self, Self::Error> {
+        let value_conv = serde_json::to_value(value)?;
+        Ok(serde_json::from_value(value_conv)?)
+    }
+}
+
+async fn load_authentication_challenge<M>(
+    mongo: &M,
+    user_id: &str,
+    hostname: &str,
+    challenge: &str
+) -> Result<PasskeyAuthenticationAjuste, CommonError> where M: MongoDaoTyped {
+    // Charger challenge correspondant
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let filtre = doc! {
+        FIELD_USER_ID: user_id,
+        FIELD_HOSTNAME: hostname,
+        FIELD_CHALLENGE_TYPE: "authentication",
+        FIELD_CHALLENGE: challenge,
+    };
+
+    debug!("Charger challenge webauthn {:?}", filtre);
+    let doc_challenge: WebauthnChallengeRow = match collection.find_one(filtre.clone()).await? {
+        Some(inner) => inner,
+        None => return Err(CommonError::Str("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn inconnu ou expire"))
+    };
+
+    let doc_webauth_state = match doc_challenge.webauthn_authentication {
+        Some(inner) => inner,
+        None => Err(format!("core_maitredescomptes.commande_authentifier_webauthn Challenge webauthn absent (None)"))?
+    };
+
+    Ok(doc_webauth_state.passkey_authentication.try_into()?)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DemandeSignatureCertificatWebauthn {
+    #[serde(rename="activationTierce", skip_serializing_if = "Option::is_none")]
+    pub activation_tierce: Option<bool>,
+    pub csr: String,
+    #[serde(with = "ts_seconds")]
+    pub date: DateTime<Utc>,
+    #[serde(rename = "nomUsager")]
+    pub nom_usager: String,
+}
+
+impl DemandeSignatureCertificatWebauthn {
+    /// Valide le message et retourne un hachage du contenu.
+    fn valider(&self) -> Result<Vec<u8>, CommonError> {
+
+        // Le message recu est valide pour 5 minutes
+        // (aussi 1 minute dans l'autre sens si clock mal ajustee)
+        let date_now = Utc::now();
+        let date_message = self.date;
+        if date_now - chrono::Duration::minutes(5) > date_message ||
+            date_now + chrono::Duration::minutes(1) < date_message {
+            Err("core_maitredescomptes.DemandeSignatureCertificatWebauthn Date expire/invalide")?
+        }
+
+        // Calculer le hachage du message
+        self.hacher()
+    }
+
+    fn hacher(&self) -> Result<Vec<u8>, CommonError> {
+        let map = serde_json::to_value(&self)?.as_object().expect("value map").to_owned();
+        let value_ordered = preparer_btree_recursif(map)?;
+        let value_serialisee = serde_json::to_string(&value_ordered)?;
+        let value_bytes = value_serialisee.as_bytes();
+        Ok(hacher_bytes_vu8(value_bytes, Some(Code::Blake2s256)))
+    }
+}
+
+pub async fn verify_authentication_challenge<M>(
+    mongo: &M,
+    user_id: &str,
+    hostname: &str,
+    challenge: &str,
+    idmg: &str,
+    request: &DemandeSignatureCertificatWebauthn,
+    client_assertion_response: ClientAssertionResponse,
+) -> Result<AuthenticationResult, CoreError> where M: MongoDaoTyped {
+    let mut passkey_authentication = load_authentication_challenge(mongo, user_id, hostname, challenge).await?;
+
+    debug!("commande_authentifier_usager Demande certificat recue : {:?}", request);
+    let hachage = request.valider()?;
+    debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+    let challenge = &passkey_authentication.ast.challenge;
+    debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
+    let mut vec_challenge_acjuste = Vec::new();
+    vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
+    vec_challenge_acjuste.extend(hachage);
+    debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
+    passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
+
+    let reg: PublicKeyCredential = client_assertion_response.try_into()?;
+    // let cred_id = reg.id.clone();
+    let passkey_authentication: PasskeyAuthentication = passkey_authentication.try_into()?;
+
+    let webauthn_value = build_webauthn(hostname, idmg)?;
+    Ok(webauthn_value.finish_passkey_authentication(&reg, &passkey_authentication)?)
 }
