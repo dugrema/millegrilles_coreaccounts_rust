@@ -73,6 +73,17 @@ impl TransactionRouter for AccountsTransactionRouter {
     }
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionInscrireUsager {
+    pub fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub securite: String,
+    pub csr: Option<String>,
+}
+
 async fn register_user(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
@@ -127,11 +138,34 @@ async fn add_signed_delegation(
     todo!()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionSupprimerCles {
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
 async fn delete_keys(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+    let transaction_value: TransactionSupprimerCles = wrapper.message.deserialize()?;
+    let mut aggregator = TransactionOperationAggregator::new();
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let filter = doc! { FIELD_USERNAME: &transaction_value.user_id };
+    let ops = doc! {
+        "$unset": { FIELD_WEBAUTHN: true },
+        "$currentDate": { FIELD_DATE_MODIFIED: true },
+    };
+    let update_model_versions = WriteModel::UpdateOne(
+        UpdateOneModel::builder()
+            .namespace(collection.namespace())
+            .filter(filter)
+            .update(ops)
+            .build()
+    );
+    aggregator.ordered = Some(vec![update_model_versions]);
+
+    Ok(aggregator)
 }
 
 async fn reset_user_webauthn(
@@ -146,15 +180,4 @@ async fn register_otp(
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
     todo!()
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TransactionInscrireUsager {
-    pub fingerprint_pk: String,
-    #[serde(rename="nomUsager")]
-    pub nom_usager: String,
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub securite: String,
-    pub csr: Option<String>,
 }

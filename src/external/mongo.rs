@@ -42,6 +42,7 @@ pub const FIELD_DATE_CREATED: &str = "created";
 pub const FIELD_DATE_MODIFIED: &str = "last_modified";
 pub const FIELD_LAST_AUTH: &str = "last_successful_authentication";
 pub const FIELD_DELEGATION_VERSION: &str = "delegations_version";
+pub const FIELD_WEBAUTHN: &str = "webauthn";
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(

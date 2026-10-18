@@ -4,7 +4,7 @@ use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
-use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager};
+use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionSupprimerCles};
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
@@ -592,7 +592,7 @@ pub async fn process_transaction<M>(
                 TRANSACTION_AJOUTER_CLE => add_key(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_MAJ_USAGER_DELEGATIONS => update_user_delegations(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(mongo, outbound, transaction, wrapper).await,
-                TRANSACTION_SUPPRIMER_CLES => delete_keys(mongo, outbound, transaction, wrapper).await,
+                TRANSACTION_SUPPRIMER_CLES => delete_keys(outbound, transaction, wrapper).await,
                 TRANSACTION_RESET_WEBAUTHN_USAGER => reset_user_webauthn(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_REGISTER_OTP => register_otp(mongo, outbound, transaction, wrapper).await,
                 _ => {
@@ -679,13 +679,36 @@ async fn add_signed_delegation<M>(
     todo!()
 }
 
-async fn delete_keys<M>(
-    mongo: &M,
+async fn delete_keys(
     outbound: &MessageOutboundFacade,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+) -> Result<(), CommonError> {
+    // Validation of structure
+    let transaction_value: TransactionSupprimerCles = wrapper.message.deserialize()?;
+
+    // Authorization
+    match wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        true => (), // Admin is allowed for all user_ids
+        false => {
+            match wrapper.certificate.get_user_id()? {
+                Some(user_id) => {
+                    if user_id.as_str() != transaction_value.user_id.as_str() {
+                        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "User_id mismatch")).await
+                    }
+                },
+                None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "User_id mismatch")).await
+            }
+        }
+    }
+
+    let delivery_info = wrapper.delivery_info.clone();
+
+    // Process transaction
+    transaction.process_transaction(wrapper.into(), None).await?;
+
+    // Respond ok
+    outbound.respond(delivery_info, ErrorMessage::ok()).await
 }
 
 async fn reset_user_webauthn<M>(
