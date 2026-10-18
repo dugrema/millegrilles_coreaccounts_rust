@@ -534,3 +534,106 @@ pub async fn verify_authentication_challenge<M>(
     let webauthn_value = build_webauthn(hostname, idmg)?;
     Ok(webauthn_value.finish_passkey_authentication(&reg, &passkey_authentication)?)
 }
+
+pub async fn preparer_challenge_generique<M>(
+    mongo: &M,
+    compte: &UserAccountRow,
+    hostname: &str,
+    type_challenge: &str
+) -> Result<WebauthnChallengeRow, CommonError> where M: MongoDaoTyped {
+    let user_id = compte.user_id.as_str();
+
+    // Genrerate a 32 bytes challenge
+    let valeur_challenge =  {
+        let mut buffer_random = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
+        let challenge = buffer_random.to_vec();
+        Base64UrlSafeData::from(challenge)
+    };
+
+    let doc_challenge = WebauthnChallengeRow::new_challenge_generique(user_id, hostname, valeur_challenge, type_challenge);
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    collection.insert_one(&doc_challenge).await?;
+
+    Ok(doc_challenge)
+}
+
+pub async fn preparer_registration_webauthn<M>(
+    mongo: &M,
+    compte: &UserAccountRow,
+    hostname: &str,
+    idmg: &str,
+) -> Result<WebauthnChallengeRow, CoreError> where M: MongoDaoTyped {
+    let hostname = hostname.as_ref();
+    let rp_origin = format!("https://{}/", hostname);
+    let user_id = compte.user_id.as_str();
+    let nom_usager = compte.nom_usager.as_str();
+    let user_uuid = uuid::Uuid::new_v4().to_string();
+    let filtre = doc! {
+        FIELD_USER_ID: user_id,
+        FIELD_CHALLENGE_TYPE: "registration",
+        FIELD_HOSTNAME: &hostname,
+    };
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let doc_registration: WebauthnChallengeRow = match collection.find_one(filtre).await? {
+        Some(inner) => inner,
+        None => {
+            let (challenge, registration) = generer_challenge_registration(
+                rp_origin.as_str(), nom_usager, &user_uuid, idmg, None::<&Vec<&str>>, // existing_credentials
+            )?;
+            let doc_registration = WebauthnChallengeRow::new_challenge_registration(
+                user_id, user_uuid.as_str(), hostname, challenge, registration);
+
+            // Sauvegarder dans la base de donnees
+            collection.insert_one(&doc_registration).await?;
+
+            doc_registration
+        }
+    };
+
+    Ok(doc_registration)
+}
+
+pub async fn preparer_authentification_webauthn<M>(
+    middleware: &M,
+    compte: &UserAccountRow,
+    hostname: &str,
+    idmg: &str
+) -> Result<WebauthnChallengeRow, millegrilles_common_rust::error::Error> where M: MongoDaoTyped {
+    let user_id = compte.user_id.as_str();
+
+    // Charger credentials existants
+    let collection = middleware.get_collection_typed::<CredentialWebauthn>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let filtre = doc! { FIELD_USER_ID: user_id, FIELD_HOSTNAME: hostname };
+    let mut credentials = Vec::new();
+    let mut curseur = collection.find(filtre).await?;
+    while let Some(row) = curseur.next().await {
+        credentials.push(row?);
+    }
+
+    let doc_challenge = if credentials.len() == 0 {
+        debug!("preparer_authentification_webauthn Aucuns credentials webauthn pour {}/{}", user_id, hostname);
+        let valeur_challenge =  {
+            let mut buffer_random = [0u8; 32];
+            openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
+            let challenge = buffer_random.to_vec();
+            Base64UrlSafeData::from(challenge)
+        };
+        WebauthnChallengeRow::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
+
+    } else {
+        let (challenge, passkey_authentication) = match generer_challenge_authentification(
+            hostname, idmg, credentials) {
+            Ok(inner) => inner,
+            Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("preparer_authentification_webauthn Erreur {:?}", e)))?
+        };
+
+        WebauthnChallengeRow::new_challenge_authentication(user_id, hostname, challenge, passkey_authentication)
+    };
+
+    // Sauvegarder challenge
+    let collection = middleware.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    collection.insert_one(&doc_challenge).await?;
+
+    Ok(doc_challenge)
+}

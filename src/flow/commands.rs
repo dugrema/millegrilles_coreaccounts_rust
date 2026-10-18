@@ -2,7 +2,7 @@ use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, verify_authentication_challenge};
+use crate::external::webauthn::{preparer_challenge_generique, verify_authentication_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn};
 use crate::flow::certificates::signer_demande_certificat_usager;
 use crate::flow::transactions::AccountsTransactionService;
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk};
@@ -16,6 +16,7 @@ use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFaca
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use serde::{Deserialize, Serialize};
+use webauthn_rs::prelude::{CreationChallengeResponse, PasskeyAuthentication, RequestChallengeResponse};
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -40,7 +41,7 @@ pub async fn process_command<M>(
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, mongo, wrapper).await,
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
-                COMMANDE_GENERER_CHALLENGE => generate_challenge(outbound, wrapper).await,
+                COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
                 COMMAND_GENERATE_OTP => generate_otp(outbound, wrapper).await,
                 COMMANDE_SUPPRIMER_COOKIE => delete_cookie(mongo, outbound, wrapper).await,
                 _ => {
@@ -224,12 +225,107 @@ async fn authenticate_totp(
     // let command: DemandeSignature = wrapper.message.deserialize()?;
 }
 
-async fn generate_challenge(
+#[derive(Deserialize)]
+struct CommandeGenererChallenge {
+    #[serde(rename="userId")]
+    user_id: Option<String>,
+    hostname: String,
+    delegation: Option<bool>,
+    #[serde(rename="webauthnRegistration")]
+    webauthn_registration: Option<bool>,
+    #[serde(rename="webauthnAuthentication")]
+    webauthn_authentication: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ReponseCommandeGenererChallenge {
+    challenge: Option<String>,
+    registration_challenge: Option<CreationChallengeResponse>,
+    authentication_challenge: Option<RequestChallengeResponse>,
+    // passkey_authentication: Option<PasskeyAuthentication>,  // Do not send, value is private
+}
+
+async fn generate_challenge<M>(
+    config: &dyn ConfigService,
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+    let command: CommandeGenererChallenge = wrapper.message.deserialize()?;
+
+    //     let commande: CommandeGenererChallenge = message_contenu.deserialize()?;
+    //     let hostname = commande.hostname.as_str();
+    //
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(inner) => inner.to_owned(),
+        None => {
+            if let Some(user_id) = command.user_id {
+                if wrapper.certificate.verifier_exchanges(vec![Securite::L2Prive, Securite::L3Protege])? {
+                    user_id
+                } else {
+                    // Requestor not allowed to act on users
+                    return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await
+                }
+            } else {
+                return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Missing user ID in command")).await
+            }
+        }
+    };
+
+    let account = match load_user_by_id(mongo, user_id.as_str()).await? {
+        Some(account) => account,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    };
+
+    //     let compte = {
+    //         let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
+    //         let filtre = doc! { CHAMP_USER_ID: &user_id };
+    //         let resultat = match collection.find_one_with_session(filtre, None, session).await? {
+    //             Some(inner) => inner,
+    //             None => {
+    //                 let reponse = json!({"ok": true, "code": 1, "err": "Usager inconnu"});
+    //                 match middleware.build_reponse(reponse) {
+    //                     Ok(m) => return Ok(Some(m.0)),
+    //                     Err(e) => Err(format!("Erreur preparation reponse commande_generer_challenge : {:?}", e))?
+    //                 }
+    //             }
+    //         };
+    //         convertir_bson_deserializable(resultat)?
+    //     };
+
+    let mut response = ReponseCommandeGenererChallenge {
+        challenge: None,
+        registration_challenge: None,
+        authentication_challenge: None,
+    };
+
+    if let Some(true) = command.delegation {
+        let doc_challenge = preparer_challenge_generique(mongo, &account, command.hostname.as_str(), "delegation").await?;
+        response.challenge = Some(doc_challenge.challenge);
+    }
+
+    let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
+
+    if let Some(true) = command.webauthn_registration {
+        let doc_challenge = match preparer_registration_webauthn(mongo, &account, command.hostname.as_str(), idmg.as_str()).await {
+            Ok(inner) => inner,
+            Err(e) => Err(millegrilles_common_rust::error::Error::String(format!("core_maitredescomptes.commande_generer_challenge Erreur {:?}", e)))?
+        };
+        match doc_challenge.get_registration_challenge() {
+            Some(inner) => response.registration_challenge = Some(inner.to_owned()),
+            None => return Err(CommonError::Str("Unable to generate registration challenge (webauthn_registration)"))
+        }
+    }
+
+    if let Some(true) = command.webauthn_authentication {
+        let challenge = preparer_authentification_webauthn(mongo, &account, command.hostname.as_str(), idmg.as_str()).await?;
+        match challenge.get_authentication_challenge() {
+            Some(inner) => response.authentication_challenge = Some(inner.to_owned()),
+            None => return Err(CommonError::Str("Unable to generate authentication challenge (webauthn_authentication)"))
+        }
+    }
+
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn generate_otp(
