@@ -10,7 +10,9 @@ use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRout
 use std::sync::Arc;
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::mongodb::options::{DeleteManyModel, UpdateOneModel, WriteModel};
+use millegrilles_common_rust::tracing::debug;
 use serde::{Deserialize, Serialize};
 use crate::external::mq::*;
 
@@ -124,11 +126,45 @@ async fn add_key(
     todo!()
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionMajUsagerDelegations {
+    pub compte_prive: Option<bool>,
+    pub delegation_globale: Option<String>,
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
 async fn update_user_delegations(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+    let transaction_value: TransactionMajUsagerDelegations = wrapper.message.deserialize()?;
+
+    let filter = doc! { FIELD_USER_ID: transaction_value.user_id.as_str() };
+    let set_ops = doc! {
+        FIELD_PRIVATE_ACCOUNT: transaction_value.compte_prive,
+        FIELD_DELEGATION_GLOBALE: transaction_value.delegation_globale,
+        FIELD_DELEGATION_DATE: bson::datetime::DateTime::now(),
+    };
+    let ops = doc! {
+        "$set": set_ops,
+        "$inc": { FIELD_DELEGATION_VERSION: 1 },
+        "$currentDate": { FIELD_DATE_MODIFIED: true},
+    };
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+
+    let update_model_versions = WriteModel::UpdateOne(
+        UpdateOneModel::builder()
+            .namespace(collection.namespace())
+            .filter(filter)
+            .update(ops)
+            .build()
+    );
+
+    let mut aggregator = TransactionOperationAggregator::new();
+    aggregator.ordered = Some(vec![update_model_versions]);
+
+    Ok(aggregator)
 }
 
 async fn add_signed_delegation(

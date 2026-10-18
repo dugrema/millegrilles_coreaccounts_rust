@@ -67,7 +67,7 @@ pub async fn emettre_maj_compte_usager<M>(
     outbound: &MessageOutboundFacade,
     user_id: &str,
     action: Option<&str>
-) -> Result<(), CommonError> where M: MongoDaoTyped {
+) -> Result<Option<UserAccountResponse>, CommonError> where M: MongoDaoTyped {
     let action = action.unwrap_or_else(|| EVENEMENT_MAJ_COMPTE_USAGER);
 
     if let Some(user_account) = load_user_by_id(mongo, user_id).await? {
@@ -89,7 +89,9 @@ pub async fn emettre_maj_compte_usager<M>(
             .partition(user_id)
             .build();
         outbound.emit_event(routage, &user_account).await?;
-    }
 
-    Ok(())
+        Ok(Some(user_account))
+    } else {
+        Ok(None)
+    }
 }

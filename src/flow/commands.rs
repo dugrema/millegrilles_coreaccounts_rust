@@ -4,7 +4,7 @@ use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
-use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionResetWebauthnUsager, TransactionSupprimerCles};
+use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionResetWebauthnUsager, TransactionSupprimerCles};
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
@@ -668,7 +668,26 @@ async fn update_user_delegations<M>(
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+    let transaction_value: TransactionMajUsagerDelegations = wrapper.message.deserialize()?;
+
+    if ! wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await
+    }
+
+    // Copy information required to finish processing the command after the transaction is saved
+    let delivery_info = wrapper.delivery_info.clone();
+    let user_id = transaction_value.user_id.clone();
+
+    if ! check_user_existence(mongo, user_id.as_str()).await? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    }
+
+    // Save transaction changes
+    transaction.process_transaction(wrapper.into(), None).await?;
+
+    // Send update events to account listeners
+    let user_account = emettre_maj_compte_usager(mongo, outbound, user_id.as_str(), Some(EVENEMENT_INSCRIRE_COMPTE_USAGER)).await?;
+    outbound.respond(delivery_info, user_account).await
 }
 
 async fn add_signed_delegation<M>(

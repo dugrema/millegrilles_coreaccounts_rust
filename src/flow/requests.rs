@@ -75,6 +75,7 @@ struct RequestLoaduser {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UserAccountResponse {
+    pub ok: bool,
     #[serde(rename="nomUsager")]
     pub nom_usager: String,
     #[serde(rename="userId")]
@@ -89,6 +90,7 @@ pub struct UserAccountResponse {
 impl From<UserAccountRow> for UserAccountResponse {
     fn from(value: UserAccountRow) -> Self {
         Self {
+            ok: true,
             nom_usager: value.nom_usager,
             user_id: value.user_id,
             compte_prive: value.compte_prive,
