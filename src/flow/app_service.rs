@@ -204,6 +204,7 @@ impl ApplicationService {
             match result {
                 Ok(message) => {
                     if let Err(e) = process_transaction(
+                        self.config.as_ref(),
                         self.mongo.as_ref(),
                         self.pki.as_ref(),
                         self.outbound.as_ref(),

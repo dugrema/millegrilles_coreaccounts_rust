@@ -2,9 +2,9 @@ use millegrilles_common_rust::{bson, serde_json};
 use millegrilles_common_rust::bson::doc;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
+use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge, verify_registration_challenge};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
-use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
+use crate::flow::transactions::{AccountsTransactionService, TransactionAddWebauthnKey, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
@@ -21,7 +21,7 @@ use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use serde::{Deserialize, Serialize};
 use totp_rs::{Algorithm, TOTP, Secret};
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
 use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
@@ -574,6 +574,7 @@ async fn delete_cookie(
 /// Process the command part of the transaction (checks, validations, volatile updates),
 /// calls transaction processor and then handles responses and emits events.
 pub async fn process_transaction<M>(
+    config: &dyn ConfigService,
     mongo: &M,
     pki: &dyn PkiService,
     outbound: &MessageOutboundFacade,
@@ -590,7 +591,7 @@ pub async fn process_transaction<M>(
         MessageKind::Commande => {
             match action {
                 TRANSACTION_INSCRIRE_USAGER => register_user(mongo, outbound, transaction, wrapper).await,
-                TRANSACTION_AJOUTER_CLE => add_key(mongo, outbound, transaction, wrapper).await,
+                TRANSACTION_AJOUTER_CLE => add_key(config, mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_MAJ_USAGER_DELEGATIONS => update_user_delegations(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_SUPPRIMER_CLES => delete_keys(outbound, transaction, wrapper).await,
@@ -653,13 +654,119 @@ async fn register_user<M>(
     outbound.respond(delivery, signed_certificate).await
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AjouterCleResponseClient {
+    #[serde(rename="attestationObject")]
+    pub attestation_object: String,
+    #[serde(rename="clientDataJSON")]
+    pub client_data_json: String,
+}
+
+impl TryInto<RegisterPublicKeyCredential> for AjouterClePublickKeyCredential {
+    type Error = millegrilles_common_rust::error::Error;
+
+    fn try_into(self) -> Result<RegisterPublicKeyCredential, Self::Error> {
+        let id = self.id;
+
+        let json_attest = json!({
+            "id": &id,
+            "rawId": id,
+            "response": self.response,
+            "type": self.type_,
+            "extensions": {},
+        });
+
+        debug!("TryInto<RegisterPublicKeyCredential> json_attest: {:?}", json_attest);
+        let cred: RegisterPublicKeyCredential = serde_json::from_value(json_attest)?;
+        debug!("TryInto<RegisterPublicKeyCredential> cred: {:?}", cred);
+
+        Ok(cred)
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AjouterClePublickKeyCredential {
+    pub id: String,
+    pub response: AjouterCleResponseClient,
+    #[serde(rename="type")]
+    pub type_: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CommandRegisterWebauthn {
+    #[serde(rename="fingerprintPk")]
+    pub fingerprint_pk: Option<String>,
+    pub hostname: String,
+    #[serde(rename="reponseChallenge")]
+    pub reponse_client: AjouterClePublickKeyCredential,
+    pub reset_cles: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct ResponseRegisterWebauthn {
+    ok: bool,
+    #[serde(rename="userId")]
+    user_id: String,
+}
+
 async fn add_key<M>(
+    config: &dyn ConfigService,
     mongo: &M,
     outbound: &MessageOutboundFacade,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+    let command: CommandRegisterWebauthn = wrapper.message.deserialize()?;
+
+    // Authorization
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(user_id) => user_id,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "User_id missing from certificate")).await
+    };
+    if get_username_for_userid(mongo, user_id.as_str()).await.is_err() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    }
+
+    let fingerprint_pk = wrapper.certificate.fingerprint_pk()?;
+    let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
+
+    // Validate the command
+    let passkey = match verify_registration_challenge(
+        mongo,
+        user_id.as_str(),
+        command.hostname.as_str(),
+        idmg.as_str(),
+        command.reponse_client,
+    ).await {
+        Ok(result) => result,
+        Err(e) => {
+            error!("Error during registration challenge verification: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "Registration challenge verification failed")).await
+        }
+    };
+
+    let credential = TransactionAddWebauthnKey {
+        user_id: user_id.clone(),
+        hostname: command.hostname,
+        passkey,
+        reset_cles: command.reset_cles,
+    };
+
+    // Produce a new transaction with the credential and process
+    transaction.process_value(
+        DOMAIN_NAME,
+        TRANSACTION_AJOUTER_CLE,
+        serde_json::to_value(credential)?,
+        None
+    ).await?;
+
+    // Cleanup of volatile state
+    let collection = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+    let filtre = doc! { FIELD_USER_ID: &user_id, FIELD_FINGERPRINT_PK: fingerprint_pk };
+    collection.delete_one(filtre).await?;
+
+    let response = ResponseRegisterWebauthn { ok: true, user_id };
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn update_user_delegations<M>(

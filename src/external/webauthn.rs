@@ -17,7 +17,7 @@ use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
 use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
-use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RequestChallengeResponse};
+use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 use crate::external::mongo::*;
 use crate::error::Error as CoreError;
@@ -668,4 +668,40 @@ pub async fn preparer_authentification_webauthn<M>(
     collection.insert_one(&doc_challenge).await?;
 
     Ok(doc_challenge)
+}
+
+pub async fn verify_registration_challenge<M>(
+    mongo: &M,
+    user_id: &str,
+    hostname: &str,
+    idmg: &str,
+    client_response: AjouterClePublickKeyCredential,
+) -> Result<Passkey, CoreError> where M: MongoDaoTyped {
+    let collection_webauthn = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let filtre_webauthn = doc! {
+        FIELD_USER_ID: user_id,
+        FIELD_HOSTNAME: hostname,
+        FIELD_CHALLENGE_TYPE: "registration"
+    };
+
+    let doc_registration: WebauthnChallengeRow = match collection_webauthn.find_one(filtre_webauthn).await? {
+        Some(inner) => inner,
+        None => Err(CommonError::Str("Unknown registration challenge"))?
+    };
+
+    // Valider la commande de registration webauthn, sauvegarder nouvelle credential, retirer challenge registration
+    let public_key_credentials: RegisterPublicKeyCredential = client_response.try_into()?;
+    let registration = match doc_registration.webauthn_registration.as_ref() {
+        Some(inner) => &inner.registration_state,
+        None => Err("webauthn.verifier_challenge_registration Mauvais type de challenge (webauthn_registration:None)")?
+    };
+
+    let rp_id = doc_registration.hostname.as_str();
+    let rp_origin = Url::parse(format!("https://{}/", rp_id).as_str())?;
+    debug!("generer_challenge_registration builder webauthn rp_origin parsed: {}", rp_origin);
+    let builder = WebauthnBuilder::new(rp_id, &rp_origin)?
+        .rp_name(idmg);
+    let webauthn = builder.build()?;
+
+    Ok(webauthn.finish_passkey_registration(&public_key_credentials, registration)?)
 }
