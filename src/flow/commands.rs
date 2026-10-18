@@ -19,8 +19,10 @@ use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFaca
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use serde::{Deserialize, Serialize};
+use totp_rs::{Algorithm, TOTP, Secret};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
 use crate::auth::cookie::creer_session_cookie;
+use crate::auth::totp::generate_totp;
 use crate::models::CookieSession;
 
 pub async fn process_command<M>(
@@ -47,7 +49,7 @@ pub async fn process_command<M>(
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, pki, mongo, outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
-                COMMAND_GENERATE_OTP => generate_otp(outbound, wrapper).await,
+                COMMAND_GENERATE_OTP => generate_otp(mongo, outbound, wrapper).await,
                 COMMANDE_SUPPRIMER_COOKIE => delete_cookie(mongo, outbound, wrapper).await,
                 _ => {
                     info!("Unknown action {} for process_command, skipping", action);
@@ -427,22 +429,6 @@ async fn generate_challenge<M>(
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
     };
 
-    //     let compte = {
-    //         let collection = middleware.get_collection(NOM_COLLECTION_USAGERS)?;
-    //         let filtre = doc! { CHAMP_USER_ID: &user_id };
-    //         let resultat = match collection.find_one_with_session(filtre, None, session).await? {
-    //             Some(inner) => inner,
-    //             None => {
-    //                 let reponse = json!({"ok": true, "code": 1, "err": "Usager inconnu"});
-    //                 match middleware.build_reponse(reponse) {
-    //                     Ok(m) => return Ok(Some(m.0)),
-    //                     Err(e) => Err(format!("Erreur preparation reponse commande_generer_challenge : {:?}", e))?
-    //                 }
-    //             }
-    //         };
-    //         convertir_bson_deserializable(resultat)?
-    //     };
-
     let mut response = ReponseCommandeGenererChallenge {
         challenge: None,
         registration_challenge: None,
@@ -478,12 +464,81 @@ async fn generate_challenge<M>(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
-async fn generate_otp(
+#[derive(Deserialize)]
+struct CommandGenerateOtp {
+    username: String,
+    hostname: String,
+}
+
+#[derive(Serialize)]
+struct ResponseGenerateOtp {
+    correlation: String,
+    qr_base64: String,
+    secret_base32: String,
+}
+
+async fn generate_otp<M>(
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+    let command: CommandGenerateOtp = wrapper.message.deserialize()?;
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(inner) => inner.to_owned(),
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "user_id missing from certificate, access denied")).await
+    };
+    let user_account = match load_user_by_id(mongo, user_id.as_str()).await? {
+        Some(account) => account,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    };
+
+    let generated_totp = generate_totp(mongo, command.username.as_str(), user_id.as_str(), command.hostname.as_str()).await?;
+
+    //     let username = commande.username.as_str();
+    //     let hostname = commande.hostname.as_str();
+
+
+
+
+    //     // Save the user_id/secret for potential new TOTP credentials.
+    //     let secret_string = secret.to_string();
+    //     debug!("command_generate_otp New secret: {:?}", secret_string);
+    //
+    //     let authenticator_id = format!("{}", username);
+    //
+    //     let totp = TOTP::new(
+    //         Algorithm::SHA512,
+    //         6,
+    //         1,
+    //         30,
+    //         secret.to_bytes().unwrap(),
+    //         Some(hostname.to_string()),
+    //         authenticator_id
+    //     ).unwrap();
+    //
+    //     let totp_url = totp.get_url();
+    //     debug!("TOTP url: {}", totp_url);
+    //     // Hash the url to obfuscate the secret
+    //     let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
+    //
+    //     // Encrypt the TOTP url, it contains the secret value
+    //     let encrypted_url = gestionnaire.encrypt_string(middleware, totp_url).await?;
+    //
+    //     let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, encrypted_url);
+    //     let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
+    //     collection.insert_one_with_session(challenge_row, None, session).await?;
+    //
+    //     // let token = totp.generate_current().unwrap();
+    //     let qr_base64 = totp.get_qr_base64().expect("totp.get_qr_base64");
+    //     let secret_base32 = totp.get_secret_base32();
+    //     debug!("New TOTP base32 secret: {}, base 64 QR: {}", secret_base32, qr_base64);
+
+    let response = ResponseGenerateOtp {
+        correlation: generated_totp.challenge_hashvalue,
+        qr_base64: generated_totp.qr_base64,
+        secret_base32: generated_totp.secret_base32,
+    };
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 #[derive(Deserialize)]
