@@ -1,4 +1,4 @@
-use millegrilles_common_rust::bson;
+use millegrilles_common_rust::{base64_url, bson, chrono, openssl};
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::{DateTime, Utc};
 use millegrilles_common_rust::constantes::*;
@@ -192,6 +192,24 @@ pub struct CookieSessionRow {
     pub created: DateTime<Utc>,
     #[serde(with = "FromChrono04DateTime")]
     pub expiration: DateTime<Utc>,
+}
+
+impl CookieSessionRow {
+    pub fn new(user_id: &str, hostname: &str, duree_session: i64) -> Self {
+        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
+
+        let mut buffer_challenge = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
+        let challenge = base64_url::encode(&buffer_challenge[..]);
+
+        Self {
+            user_id: user_id.into(),
+            hostname: hostname.into(),
+            challenge,
+            created: Utc::now(),
+            expiration: date_expiration,
+        }
+    }
 }
 
 pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Option<UserAccountRow>, CommonError> {

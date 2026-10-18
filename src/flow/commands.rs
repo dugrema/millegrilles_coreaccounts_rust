@@ -7,9 +7,10 @@ use crate::flow::certificates::signer_demande_certificat_usager;
 use crate::flow::transactions::AccountsTransactionService;
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk};
 use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::error::Error as CommonError;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tracing::{debug, error, info};
@@ -19,6 +20,8 @@ use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
+use crate::auth::cookie::creer_session_cookie;
+use crate::models::CookieSession;
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -41,7 +44,7 @@ pub async fn process_command<M>(
                 COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(config, pki, mongo, outbound, wrapper).await,
                 COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(pki, mongo, outbound, wrapper).await,
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, mongo, wrapper).await,
-                COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, mongo, outbound, wrapper).await,
+                COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, pki, mongo, outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
                 COMMAND_GENERATE_OTP => generate_otp(outbound, wrapper).await,
@@ -274,10 +277,13 @@ struct ResponseAuthentificateUser {
     counter: u32,
     #[serde(rename = "userVerification")]
     user_verified: bool,
+    certificat: Option<Vec<String>>,
+    cookie: Option<CookieSession>,
 }
 
 async fn authenticate_webauthn<M>(
     config: &dyn ConfigService,
+    pki: &dyn PkiService,
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
@@ -289,6 +295,12 @@ async fn authenticate_webauthn<M>(
     // Keep cred_id for database usage
     let reg: PublicKeyCredential = command.commande_webauthn.webauthn.clone().try_into()?;
     let cred_id = reg.id;
+
+    // Check that the user account exists
+    let user_account = match load_user_by_id(mongo, command.user_id.as_str()).await? {
+        Some(inner) => inner,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    };
 
     let auth_result = match verify_authentication_challenge(
         mongo,
@@ -324,53 +336,34 @@ async fn authenticate_webauthn<M>(
     let ops = doc! { "$set": { FIELD_LAST_AUTH: Utc::now() } };
     collection.update_one(filtre, ops).await?;
 
-    //     if let Some(demande_certificat) = demande_certificat {
-    //         debug!("Generer le nouveau certificat pour l'usager et le retourner");
-    //         let user_id = &commande.user_id;
-    //         let csr = demande_certificat.csr;
-    //         let compte_usager = match charger_compte_user_id(middleware, &commande.user_id, session).await {
-    //             Ok(inner) => match inner {
-    //                 Some(inner) => inner,
-    //                 None => {
-    //                     error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
-    //                     let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
-    //                     return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //                 }
-    //             },
-    //             Err(e) => {
-    //                 error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
-    //                 let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
-    //                 return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
-    //             }
-    //         };
-    //         let nom_usager = &compte_usager.nom_usager;
-    //         // let securite = SECURITE_1_PUBLIC;
-    //         let reponse_commande = signer_certificat_usager(
-    //             middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
-    //         let reponse_ref = reponse_commande.parse()?;
-    //         let message_contenu = reponse_ref.contenu()?;
-    //         let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
-    //         if let Some(certificat) = info_certificat.certificat {
-    //             // Inserer le certificat dans la reponse
-    //             reponse_ok.as_object_mut().expect("as_object_mut")
-    //                 .insert("certificat".to_string(), certificat.into());
-    //         }
-    //     }
-    //
-    //     if let Some(duree_session) = commande.commande_webauthn.duree_session {
-    //         debug!("Creer cookie de session");
-    //         match creer_session_cookie(middleware, &commande.user_id, &commande.hostname, duree_session, session).await {
-    //             Ok(inner) => {
-    //                 reponse_ok.as_object_mut().expect("as_object_mut")
-    //                     .insert("cookie".to_string(), inner.into());
-    //             },
-    //             Err(e) => {
-    //                 error!("Erreur creation cookie session : {:?}", e);
-    //             }
-    //         }
-    //     }
+    // Prepare response, some values may be added (certificate, cookie)
+    let mut response = ResponseAuthentificateUser {
+        ok: true,
+        counter: auth_result.counter(),
+        user_verified: auth_result.user_verified(),
+        certificat: None,
+        cookie: None
+    };
 
-    let response = ResponseAuthentificateUser { ok: true, counter: auth_result.counter(), user_verified: auth_result.user_verified() };
+    if let Some(demande_certificat) = command.commande_webauthn.demande_certificat {
+        let signed_certificate_response = signer_demande_certificat_usager(
+            pki,
+            mongo,
+            outbound,
+            &user_account,
+            &demande_certificat
+        ).await?;
+        let cert_response: ReponseSignatureCertificat = signed_certificate_response.deserialize()?;
+        if let Some(certificate) = cert_response.certificat {
+            response.certificat = Some(certificate);
+        }
+    }
+
+    if let Some(duree_session) = command.commande_webauthn.duree_session {
+        let cookie = creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), duree_session).await?;
+        response.cookie = Some(cookie.into());
+    }
+
     outbound.respond(wrapper.delivery_info, response).await
 }
 

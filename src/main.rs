@@ -4,6 +4,7 @@ mod constants;
 mod models;
 mod state;
 mod error;
+pub mod auth;
 
 use clap::Parser;
 use clap_derive::Parser;
