@@ -617,7 +617,7 @@ async fn register_user<M>(
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
     let transaction_value: TransactionInscrireUsager = wrapper.message.deserialize()?;
 
-    if check_user_existence(mongo, transaction_value.nom_usager.as_str()).await? {
+    if check_username_existence(mongo, transaction_value.nom_usager.as_str()).await? {
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(409, "User already registered")).await
     }
 
@@ -678,7 +678,7 @@ async fn update_user_delegations<M>(
     let delivery_info = wrapper.delivery_info.clone();
     let user_id = transaction_value.user_id.clone();
 
-    if ! check_user_existence(mongo, user_id.as_str()).await? {
+    if let Err(_) = get_username_for_userid(mongo, user_id.as_str()).await {
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
     }
 

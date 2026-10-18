@@ -236,7 +236,7 @@ pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Opti
     }
 }
 
-pub async fn check_user_existence(mongo: &dyn MongoDao, username: &str) -> Result<bool, CommonError> {
+pub async fn check_username_existence(mongo: &dyn MongoDao, username: &str) -> Result<bool, CommonError> {
     let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
     let filter = doc!{ FIELD_USERNAME: username };
     let exists = collection
@@ -244,4 +244,22 @@ pub async fn check_user_existence(mongo: &dyn MongoDao, username: &str) -> Resul
         .projection(doc! {FIELD_USER_ID: true})
         .await?.is_some();
     Ok(exists)
+}
+
+pub async fn get_username_for_userid(mongo: &dyn MongoDao, user_id: &str) -> Result<String, CommonError> {
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let filter = doc!{ FIELD_USER_ID: user_id };
+    match collection
+        .find_one(filter)
+        .projection(doc! {FIELD_USERNAME: true})
+        .await?
+    {
+        Some(doc) => {
+            match doc.get(FIELD_USERNAME) {
+                Some(username) => Ok(username.to_string()),
+                None => Err(CommonError::Str("Missing username from record"))
+            }
+        },
+        None => Err(CommonError::Str("Unknown user_id"))
+    }
 }
