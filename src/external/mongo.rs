@@ -41,6 +41,7 @@ pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
 pub const FIELD_DATE_CREATED: &str = "created";
 pub const FIELD_DATE_MODIFIED: &str = "last_modified";
 pub const FIELD_LAST_AUTH: &str = "last_successful_authentication";
+pub const FIELD_DELEGATION_VERSION: &str = "delegations_version";
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(
@@ -219,4 +220,14 @@ pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Opti
         Some(c) => Ok(Some(bson::deserialize_from_document(c)?)),
         None => Ok(None)
     }
+}
+
+pub async fn check_user_existence(mongo: &dyn MongoDao, username: &str) -> Result<bool, CommonError> {
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let filter = doc!{ FIELD_USERNAME: username };
+    let exists = collection
+        .find_one(filter)
+        .projection(doc! {FIELD_USER_ID: true})
+        .await?.is_some();
+    Ok(exists)
 }

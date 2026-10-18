@@ -8,6 +8,10 @@ use millegrilles_common_rust::v3::impls::transaction_service::TransactionService
 use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
 use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
 use std::sync::Arc;
+use millegrilles_common_rust::bson;
+use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::mongodb::options::{UpdateOneModel, WriteModel};
+use serde::{Deserialize, Serialize};
 use crate::external::mq::*;
 
 pub struct AccountsTransactionService {
@@ -34,7 +38,7 @@ impl AccountsTransactionService {
         Self { transaction: Arc::new(service) }
     }
 
-    pub async fn _process_transaction(&self, wrapper: TransactionWrapper, session: Option<&mut ClientSession>) -> Result<(), CommonError> {
+    pub async fn process_transaction(&self, wrapper: TransactionWrapper, session: Option<&mut ClientSession>) -> Result<(), CommonError> {
         self.transaction.process_transaction(wrapper, session).await
     }
 
@@ -73,37 +77,33 @@ async fn register_user(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
-    // let certificate: TransactionCertificat = wrapper.message.deserialize()?;
-    //
-    // let mut enveloppe = EnveloppeCertificat::try_from(certificate.pem.as_str())?;
-    // if let Some(ca) = certificate.ca {
-    //     enveloppe.millegrille = Some(X509::from_pem(ca.as_bytes())?);
-    // }
-    // let row: CertificateRow = enveloppe.try_into()?;
-    //
-    // let mut aggregator = TransactionOperationAggregator::new();
-    // if ignore_duplicates {
-    //     // Support for legacy systems with duplicates on restoration
-    //     let collection = mongo.get_collection(COLLECTION_NAME_CERTIFICATES)?;
-    //     let filtre_versions = doc! { PKI_DOCUMENT_CHAMP_FINGERPRINT: &row.fingerprint };
-    //     let ops = doc!{"$set": bson::serialize_to_bson(&row)?};
-    //     let update_model_versions = WriteModel::UpdateOne(
-    //         UpdateOneModel::builder()
-    //             .upsert(true)
-    //             .namespace(collection.namespace())
-    //             .filter(filtre_versions)
-    //             .update(ops)
-    //             .build()
-    //     );
-    //     aggregator.unordered = Some(vec![update_model_versions]);   // This really is just an insert
-    // } else {
-    //     // Default behavior, insert and raise Error on record duplication
-    //     let doc_row = bson::serialize_to_document(&row)?;
-    //     aggregator.batch_insertion(BatchInsertions::new(COLLECTION_NAME_CERTIFICATES, vec![doc_row]))?;
-    // }
-    //
-    // Ok(aggregator)
+    let transaction_value: TransactionInscrireUsager = wrapper.message.deserialize()?;
+
+    let mut aggregator = TransactionOperationAggregator::new();
+
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let filter = doc! { FIELD_USERNAME: &transaction_value.nom_usager };
+    let ops = doc! {
+        "$set": {
+            FIELD_USER_ID: &transaction_value.user_id,
+        },
+        "$setOnInsert": {
+            FIELD_DATE_CREATED: bson::datetime::DateTime::now(),
+            FIELD_DELEGATION_VERSION: 1,
+        },
+        "$currentDate": { FIELD_DATE_MODIFIED: true },
+    };
+    let update_model_versions = WriteModel::UpdateOne(
+        UpdateOneModel::builder()
+            .upsert(true)
+            .namespace(collection.namespace())
+            .filter(filter)
+            .update(ops)
+            .build()
+    );
+    aggregator.ordered = Some(vec![update_model_versions]);
+
+    Ok(aggregator)
 }
 
 async fn add_key(
@@ -146,4 +146,15 @@ async fn register_otp(
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
     todo!()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionInscrireUsager {
+    pub fingerprint_pk: String,
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub securite: String,
+    pub csr: Option<String>,
 }

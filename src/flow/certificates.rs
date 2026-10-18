@@ -1,7 +1,8 @@
+use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::{Securite, DOMAINE_PKI};
-use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
+use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::tracing::{debug, event};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
@@ -20,20 +21,17 @@ pub async fn signer_demande_certificat_usager<M>(
     outbound: &MessageOutboundFacade,
     compte_usager: &UserAccountRow,
     demande_certificat: &DemandeSignatureCertificatWebauthn
-) -> Result<MessageMilleGrillesOwned, CommonError> where M: MongoDaoTyped {
+) -> Result<ReponseCertificatSigne, CommonError> where M: MongoDaoTyped {
     let nom_usager = &compte_usager.nom_usager;
     let user_id = &compte_usager.user_id;
-    let response = signer_certificat_usager(
+    let certificate_response = signer_certificat_usager(
         outbound, nom_usager, user_id, demande_certificat.csr.as_str(), Some(&compte_usager)).await?;
-
-    // Validate the response (structure)
-    let certificate_response: ReponseCertificatSigne = response.deserialize()?;
 
     // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
     debug!("commande_signer_compte_usager Activation tierce : {:?}", demande_certificat.activation_tierce);
     if let Some(true) = demande_certificat.activation_tierce {
         // Calculer fingerprint du nouveau certificat
-        let pem = certificate_response.certificat;
+        let pem = &certificate_response.certificat;
         let pem_string = pem.join("\n");
         let enveloppe_cert = pki.validate_pem(pem_string.as_str(), None, None)?;
         let fingerprint_pk = enveloppe_cert.fingerprint_pk()?;
@@ -42,7 +40,7 @@ pub async fn signer_demande_certificat_usager<M>(
         let collection_activations = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
         let filtre = doc! { FIELD_USER_ID: user_id, FIELD_FINGERPRINT_PK: &fingerprint_pk };
         let ops = doc! {
-            "$set": { "certificat": &pem },
+            "$set": { "certificat": pem },
             "$setOnInsert": { FIELD_DATE_CREATED: Utc::now() },
             "$currentDate": { FIELD_DATE_MODIFIED: true }
         };
@@ -63,7 +61,7 @@ pub async fn signer_demande_certificat_usager<M>(
         debug!("commande_signer_compte_usager Activation compte {} via meme appareil (pas tierce)", nom_usager);
     }
 
-    Ok(response)    // Le message de reponse va etre emis par le module de signature de certificat
+    Ok(certificate_response)
 }
 
 #[derive(Serialize)]
@@ -96,20 +94,20 @@ impl CommandeSignatureUsager {
     }
 }
 
-#[derive(Clone, Debug, Deserialize)]
-struct ReponseCertificatSigne {
-    ok: bool,
-    certificat: Vec<String>,
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReponseCertificatSigne {
+    pub ok: bool,
+    pub certificat: Vec<String>,
 }
 
 /// Signe un certificat usager sans autre forme de validation. Utilise certissuerInterne/.
-async fn signer_certificat_usager(
+pub async fn signer_certificat_usager(
     outbound: &MessageOutboundFacade,
     nom_usager: &str,
     user_id: &str,
     csr: &str,
     compte: Option<&UserAccountRow>
-) -> Result<MessageMilleGrillesOwned, CommonError> {
+) -> Result<ReponseCertificatSigne, CommonError> {
     let nom_usager_str = nom_usager.as_ref();
     let user_id_str = user_id.as_ref();
     let csr_str = csr.as_ref();
@@ -125,8 +123,29 @@ async fn signer_certificat_usager(
             if let (true, e) = response.is_err()? {
                 return Err(CommonError::String(format!("signer_certificat_usager Error when signing new user certificate: {:?}", e)))
             }
-            Ok(response.message)
+            let response: ReponseCertificatSigne = response.message.deserialize()?;
+            Ok(response)
         },
         None => Err(CommonError::Str("signer_certificat_usager No response provided to command"))
     }
+}
+
+pub async fn ajouter_fingerprint_pk_usager(
+    mongo: &dyn MongoDao,
+    user_id: &str,
+    fingerprint_pk: &str
+) -> Result<(), millegrilles_common_rust::error::Error> {
+    let filtre = doc! { FIELD_USER_ID: user_id, FIELD_FINGERPRINT_PK: fingerprint_pk };
+    let ops = doc! {
+        "$setOnInsert": { FIELD_DATE_CREATED: bson::datetime::DateTime::now() },
+        "$currentDate": { FIELD_DATE_MODIFIED: true },
+    };
+
+    let collection = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+    collection
+        .update_one(filtre, ops)
+        .upsert(true)
+        .await?;
+
+    Ok(())
 }

@@ -3,9 +3,9 @@ use millegrilles_common_rust::bson::doc;
 use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
-use crate::flow::certificates::signer_demande_certificat_usager;
-use crate::flow::transactions::AccountsTransactionService;
-use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk};
+use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
+use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager};
+use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
@@ -23,6 +23,8 @@ use totp_rs::{Algorithm, TOTP, Secret};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
+use crate::constants::EVENEMENT_INSCRIRE_COMPTE_USAGER;
+use crate::flow::events::emettre_maj_compte_usager;
 use crate::models::CookieSession;
 
 pub async fn process_command<M>(
@@ -355,10 +357,7 @@ async fn authenticate_webauthn<M>(
             &user_account,
             &demande_certificat
         ).await?;
-        let cert_response: ReponseSignatureCertificat = signed_certificate_response.deserialize()?;
-        if let Some(certificate) = cert_response.certificat {
-            response.certificat = Some(certificate);
-        }
+        response.certificat = Some(signed_certificate_response.certificat);
     }
 
     if let Some(duree_session) = command.commande_webauthn.duree_session {
@@ -615,25 +614,42 @@ async fn register_user<M>(
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
-    // let transaction_value: CommandSaveCertificate = wrapper.message.deserialize()?;
+    let transaction_value: TransactionInscrireUsager = wrapper.message.deserialize()?;
 
-    // // Run transaction updates
-    // let delivery_info = wrapper.delivery_info.clone();
-    // //if let Err(e) = transaction.process_transaction(wrapper.into(), None).await {
-    // let transaction_value = TransactionCertificat { pem: pem_chain_str, ca: transaction_value.ca };
-    // if let Err(e) = transaction.process_value(
-    //     DOMAIN_NAME,
-    //     TRANSACTION_ACTION_NEW_CERTIFICATE,
-    //     serde_json::to_value(transaction_value)?,
-    //     None
-    // ).await {
-    //     info!("Error saving certificate: {:?}", e);
-    //     return outbound.respond(delivery_info, ErrorMessage::err_code(500, "Error saving certificate")).await
-    // }
-    //
-    // // Success
-    // outbound.respond(delivery_info, ErrorMessage::ok()).await
+    if check_user_existence(mongo, transaction_value.nom_usager.as_str()).await? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(409, "User already registered")).await
+    }
+
+    let csr = match transaction_value.csr {
+        Some(csr) => csr,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "CSR missing from request")).await
+    };
+
+    let fingerprint_pk = match csr_calculer_fingerprintpk(csr.as_str()) {
+        Ok(fp) => fp,
+        Err(_) => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "CSR invalid")).await
+    };
+
+    let signed_certificate = signer_certificat_usager(
+        outbound,
+        transaction_value.nom_usager.as_str(),
+        transaction_value.user_id.as_str(),
+        csr.as_str(),
+        None
+    ).await?;
+    ajouter_fingerprint_pk_usager(mongo, transaction_value.user_id.as_str(), fingerprint_pk.as_str()).await?;
+
+    // Keep a copy
+    let user_id = transaction_value.user_id.clone();
+    let delivery = wrapper.delivery_info.clone();
+
+    // Process transaction
+    transaction.process_transaction(wrapper.into(), None).await?;
+
+    // Send update events to account listeners
+    emettre_maj_compte_usager(mongo, outbound, user_id.as_str(), Some(EVENEMENT_INSCRIRE_COMPTE_USAGER)).await?;
+
+    outbound.respond(delivery, signed_certificate).await
 }
 
 async fn add_key<M>(
