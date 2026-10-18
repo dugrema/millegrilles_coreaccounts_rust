@@ -40,7 +40,7 @@ pub const FIELD_CORRELATION: &str = "correlation";
 pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
 pub const FIELD_DATE_CREATED: &str = "created";
 pub const FIELD_DATE_MODIFIED: &str = "last_modified";
-
+pub const FIELD_LAST_AUTH: &str = "last_successful_authentication";
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(

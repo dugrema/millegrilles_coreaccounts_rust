@@ -21,6 +21,7 @@ use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChal
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 use crate::external::mongo::*;
 use crate::error::Error as CoreError;
+use crate::flow::commands::*;
 
 pub async fn prepare_registration<M>(
     config: &dyn ConfigService,
@@ -505,7 +506,7 @@ impl DemandeSignatureCertificatWebauthn {
     }
 }
 
-pub async fn verify_authentication_challenge<M>(
+pub async fn verify_certificate_signature_challenge<M>(
     mongo: &M,
     user_id: &str,
     hostname: &str,
@@ -529,6 +530,37 @@ pub async fn verify_authentication_challenge<M>(
 
     let reg: PublicKeyCredential = client_assertion_response.try_into()?;
     // let cred_id = reg.id.clone();
+    let passkey_authentication: PasskeyAuthentication = passkey_authentication.try_into()?;
+
+    let webauthn_value = build_webauthn(hostname, idmg)?;
+    Ok(webauthn_value.finish_passkey_authentication(&reg, &passkey_authentication)?)
+}
+
+pub async fn verify_authentication_challenge<M>(
+    mongo: &M,
+    user_id: &str,
+    hostname: &str,
+    challenge: &str,
+    idmg: &str,
+    request: Option<&DemandeSignatureCertificatWebauthn>,
+    client_authentication_response: ClientAuthentificationWebauthn,
+) -> Result<AuthenticationResult, CoreError> where M: MongoDaoTyped {
+    let mut passkey_authentication = load_authentication_challenge(mongo, user_id, hostname, challenge).await?;
+
+    if let Some(request) = request {
+        debug!("commande_authentifier_usager Demande certificat recue : {:?}", request);
+        let hachage = request.valider()?;
+        debug!("commande_authentifier_usager Hachage calcule pour demande de certificat : {:?}", hachage);
+        let challenge = &passkey_authentication.ast.challenge;
+        debug!("commande_authentifier_usager Challenge existant : {:?} / {}", challenge, challenge.to_string());
+        let mut vec_challenge_acjuste = Vec::new();
+        vec_challenge_acjuste.extend_from_slice(&challenge.0[..]);
+        vec_challenge_acjuste.extend(hachage);
+        debug!("commande_authentifier_usager Hachage ajuste pour demande de certificat : {:?}", vec_challenge_acjuste);
+        passkey_authentication.ast.challenge = Base64UrlSafeData::from(vec_challenge_acjuste);
+    }
+
+    let reg: PublicKeyCredential = client_authentication_response.try_into()?;
     let passkey_authentication: PasskeyAuthentication = passkey_authentication.try_into()?;
 
     let webauthn_value = build_webauthn(hostname, idmg)?;

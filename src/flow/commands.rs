@@ -1,22 +1,24 @@
-use millegrilles_common_rust::bson;
+use millegrilles_common_rust::{bson, serde_json};
 use millegrilles_common_rust::bson::doc;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{preparer_challenge_generique, verify_authentication_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn};
+use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
 use crate::flow::certificates::signer_demande_certificat_usager;
 use crate::flow::transactions::AccountsTransactionService;
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk};
+use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
+use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tracing::{debug, error, info};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
 use serde::{Deserialize, Serialize};
-use webauthn_rs::prelude::{CreationChallengeResponse, PasskeyAuthentication, RequestChallengeResponse};
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -39,7 +41,7 @@ pub async fn process_command<M>(
                 COMMANDE_SIGNER_COMPTEUSAGER => sign_user_account(config, pki, mongo, outbound, wrapper).await,
                 COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(pki, mongo, outbound, wrapper).await,
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, mongo, wrapper).await,
-                COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(outbound, wrapper).await,
+                COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, mongo, outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
                 COMMAND_GENERATE_OTP => generate_otp(outbound, wrapper).await,
@@ -92,7 +94,7 @@ async fn sign_user_account<M>(
 
     let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
 
-    match verify_authentication_challenge(
+    match verify_certificate_signature_challenge(
         mongo,
         account.user_id.as_str(),
         command.hostname.as_str(),
@@ -209,12 +211,167 @@ async fn add_csr_recovery(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
-async fn authenticate_webauthn(
+
+#[derive(Clone, Serialize, Deserialize)]
+struct ResponseChallengeAuthenticationWebauthn {
+    #[serde(rename = "authenticatorData")]
+    authenticator_data: Base64UrlSafeData,
+    #[serde(rename = "clientDataJSON")]
+    client_data_json: Base64UrlSafeData,
+    signature: Base64UrlSafeData,
+    #[serde(rename = "userHandle")]
+    user_handle: Option<String>,
+}
+
+#[derive(Clone, Deserialize)]
+pub struct ClientAuthentificationWebauthn {
+    id64: Base64UrlSafeData,
+    response: ResponseChallengeAuthenticationWebauthn,
+    #[serde(rename = "type")]
+    type_: Option<String>,
+}
+
+impl TryInto<PublicKeyCredential> for ClientAuthentificationWebauthn {
+    type Error = serde_json::Error;
+
+    fn try_into(self) -> Result<PublicKeyCredential, Self::Error> {
+        let id = self.id64;
+
+        let pk_json = json!({
+            "id": &id,
+            "rawId": id,
+            "response": self.response,
+            "extensions": {},
+            "type": self.type_,
+        });
+
+        Ok(serde_json::from_value(pk_json)?)
+    }
+}
+
+#[derive(Deserialize)]
+struct CommandeClientAuthentificationWebauthn {
+    #[serde(rename = "demandeCertificat")]
+    demande_certificat: Option<DemandeSignatureCertificatWebauthn>,
+    #[serde(rename = "dureeSession", skip_serializing_if = "Option::is_none")]
+    duree_session: Option<i64>,
+    webauthn: ClientAuthentificationWebauthn,
+}
+
+#[derive(Deserialize)]
+struct CommandeAuthentificationUsager {
+    #[serde(rename="userId")]
+    user_id: String,
+    hostname: String,
+    challenge: String,
+    #[serde(rename="reponseWebauthn")]
+    commande_webauthn: CommandeClientAuthentificationWebauthn,
+}
+
+#[derive(Serialize)]
+struct ResponseAuthentificateUser {
+    ok: bool,
+    counter: u32,
+    #[serde(rename = "userVerification")]
+    user_verified: bool,
+}
+
+async fn authenticate_webauthn<M>(
+    config: &dyn ConfigService,
+    mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+    let command: CommandeAuthentificationUsager = wrapper.message.deserialize()?;
+
+    let idmg = config.get_configuration_pki().get_enveloppe_privee().enveloppe_pub.idmg()?;
+
+    // Keep cred_id for database usage
+    let reg: PublicKeyCredential = command.commande_webauthn.webauthn.clone().try_into()?;
+    let cred_id = reg.id;
+
+    let auth_result = match verify_authentication_challenge(
+        mongo,
+        command.user_id.as_str(),
+        command.hostname.as_str(),
+        command.challenge.as_str(),
+        idmg.as_str(),
+        command.commande_webauthn.demande_certificat.as_ref(),
+        command.commande_webauthn.webauthn.try_into()
+            .map_err(|e| CommonError::Str("Error mapping command.commande_webauthn.webauthn to ClientAuthentificationWebauthn"))?,
+    ).await {
+        Ok(result) => result,
+        Err(e) => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await
+    };
+
+    // Supprimer challenge pour eviter reutilisation
+    let collection = mongo.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let filtre = doc! {
+        FIELD_USER_ID: &command.user_id,
+        FIELD_HOSTNAME: &command.hostname,
+        FIELD_CHALLENGE_TYPE: "authentication",
+        FIELD_CHALLENGE: &command.challenge,
+    };
+    collection.delete_one(filtre).await?;
+
+    // Conserver dernier acces pour la passkey
+    let collection = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let filtre = doc! {
+        FIELD_USER_ID: &command.user_id,
+        FIELD_HOSTNAME: &command.hostname,
+        "passkey.cred.cred_id": cred_id,
+    };
+    let ops = doc! { "$set": { FIELD_LAST_AUTH: Utc::now() } };
+    collection.update_one(filtre, ops).await?;
+
+    //     if let Some(demande_certificat) = demande_certificat {
+    //         debug!("Generer le nouveau certificat pour l'usager et le retourner");
+    //         let user_id = &commande.user_id;
+    //         let csr = demande_certificat.csr;
+    //         let compte_usager = match charger_compte_user_id(middleware, &commande.user_id, session).await {
+    //             Ok(inner) => match inner {
+    //                 Some(inner) => inner,
+    //                 None => {
+    //                     error!("core_maitredescomptes.commande_authentifier_webauthn Compte usager inconnu pour generer certificat");
+    //                     let reponse_ok = json!({"ok": false, "err": "Compte usager inconnu pour generer nouveau certificat", "code": 3});
+    //                     return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //                 }
+    //             },
+    //             Err(e) => {
+    //                 error!("core_maitredescomptes.commande_authentifier_webauthn Erreur chargement compte usager pour generer certificat : {:?}", e);
+    //                 let reponse_ok = json!({"ok": false, "err": "Erreur verification challenge webauthn", "code": 4});
+    //                 return Ok(Some(middleware.build_reponse(reponse_ok)?.0))
+    //             }
+    //         };
+    //         let nom_usager = &compte_usager.nom_usager;
+    //         // let securite = SECURITE_1_PUBLIC;
+    //         let reponse_commande = signer_certificat_usager(
+    //             middleware, nom_usager, user_id, csr, Some(&compte_usager)).await?;
+    //         let reponse_ref = reponse_commande.parse()?;
+    //         let message_contenu = reponse_ref.contenu()?;
+    //         let info_certificat: ReponseSignatureCertificat = message_contenu.deserialize()?;
+    //         if let Some(certificat) = info_certificat.certificat {
+    //             // Inserer le certificat dans la reponse
+    //             reponse_ok.as_object_mut().expect("as_object_mut")
+    //                 .insert("certificat".to_string(), certificat.into());
+    //         }
+    //     }
+    //
+    //     if let Some(duree_session) = commande.commande_webauthn.duree_session {
+    //         debug!("Creer cookie de session");
+    //         match creer_session_cookie(middleware, &commande.user_id, &commande.hostname, duree_session, session).await {
+    //             Ok(inner) => {
+    //                 reponse_ok.as_object_mut().expect("as_object_mut")
+    //                     .insert("cookie".to_string(), inner.into());
+    //             },
+    //             Err(e) => {
+    //                 error!("Erreur creation cookie session : {:?}", e);
+    //             }
+    //         }
+    //     }
+
+    let response = ResponseAuthentificateUser { ok: true, counter: auth_result.counter(), user_verified: auth_result.user_verified() };
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 async fn authenticate_totp(
