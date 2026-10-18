@@ -223,8 +223,8 @@ pub struct TotpCredentialsRow {
     // pub hostname: String,
     pub correlation: String,
     pub encrypted_totp_url: EncryptedDocument,
-    #[serde(rename="_mg-creation", with="FromChrono04DateTime")]
-    pub date_creation: DateTime<Utc>,
+    #[serde(with="FromChrono04DateTime")]
+    pub created: DateTime<Utc>,
 }
 
 pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Option<UserAccountRow>, CommonError> {

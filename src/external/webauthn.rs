@@ -83,8 +83,8 @@ pub struct WebauthnChallengeRow {
     pub hostname: String,
     pub challenge: String,
 
-    #[serde(rename="_mg-creation", with="FromChrono04DateTime")]
-    pub date_creation: DateTime<Utc>,
+    #[serde(with="FromChrono04DateTime")]
+    pub created: DateTime<Utc>,
 
     /// Pour une registration webauthn (private)
     webauthn_registration: Option<ChallengeRegistrationWebauthn>,
@@ -117,7 +117,7 @@ impl WebauthnChallengeRow {
             type_challenge: "registration".to_string(),
             hostname: hostname.into(),
             challenge,
-            date_creation: Utc::now(),
+            created: Utc::now(),
             webauthn_registration: Some(webauthn_registration),
             webauthn_authentication: None,
             totp_url_encrypted: None,
@@ -140,7 +140,7 @@ impl WebauthnChallengeRow {
             type_challenge: "authentication".to_string(),
             hostname: hostname.into(),
             challenge,
-            date_creation: Utc::now(),
+            created: Utc::now(),
             webauthn_registration: None,
             webauthn_authentication: Some(webauthn_authentication),
             totp_url_encrypted: None,
@@ -161,7 +161,7 @@ impl WebauthnChallengeRow {
             type_challenge,
             hostname: hostname.into(),
             challenge,
-            date_creation: Utc::now(),
+            created: Utc::now(),
             webauthn_registration: None,
             webauthn_authentication: None,
             totp_url_encrypted: None,
@@ -174,7 +174,7 @@ impl WebauthnChallengeRow {
             type_challenge: "totp".to_string(),
             hostname: hostname.into(),
             challenge: challenge.into(),
-            date_creation: Utc::now(),
+            created: Utc::now(),
             webauthn_registration: None,
             webauthn_authentication: None,
             totp_url_encrypted: Some(encrypted_url)
@@ -205,9 +205,9 @@ struct CredentialWebauthn {
     hostname: String,
     passkey: Passkey,
     #[serde(skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
-    date_creation: Option<DateTime<Utc>>,
-    #[serde(skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
-    derniere_utilisation: Option<DateTime<Utc>>,
+    created: Option<DateTime<Utc>>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
+    last_successful_authentication: Option<DateTime<Utc>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reset_cles: Option<bool>,
 }
@@ -359,7 +359,7 @@ pub struct WebauthnCredentialsRow {
     pub user_id: String,
     pub hostname: String,
     #[serde(with = "FromChrono04DateTime")]
-    pub date_creation: DateTime<Utc>,
+    pub created: DateTime<Utc>,
     #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
     pub dernier_auth: Option<DateTime<Utc>>,
     pub passkey: PasskeyAuthenticationCred,

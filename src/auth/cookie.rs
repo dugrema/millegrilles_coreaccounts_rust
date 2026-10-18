@@ -16,7 +16,6 @@ pub async fn creer_session_cookie(
 
     let ops = doc!{
         "$set": bson::serialize_to_document(&cookie)?,
-        "$currentDate": { FIELD_DATE_CREATED: true },
     };
 
     let filter = doc!{FIELD_CHALLENGE: &cookie.challenge};

@@ -397,7 +397,7 @@ async fn register_otp(
         user_id: transaction_value.user_id.clone(),
         correlation: transaction_value.correlation,
         encrypted_totp_url: transaction_value.encrypted_totp_url,
-        date_creation: date_created,
+        created: date_created,
     };
     let collection_totp = mongo.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
 
