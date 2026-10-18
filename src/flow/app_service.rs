@@ -15,6 +15,7 @@ use millegrilles_common_rust::v3::impls::backup_restorer::RestorationState;
 use millegrilles_common_rust::v3::impls::messaging_service::MessagingServiceImpl;
 use millegrilles_common_rust::v3::{BackupService, ChiffrageService, ConfigService, PkiService};
 use std::sync::{Arc, Mutex};
+use crate::document_encryption::DocumentEncryptionService;
 use crate::flow::backup::process_backup;
 use crate::flow::commands::{process_command, process_transaction};
 use crate::flow::events::process_events;
@@ -31,6 +32,7 @@ pub struct ApplicationService {
     transaction: Arc<AccountsTransactionService>,
     mongo: Arc<MongoDaoImpl>,
     backup: Arc<dyn BackupService>,
+    document_encryption: Arc<DocumentEncryptionService>,
 }
 
 impl ApplicationService {
@@ -42,6 +44,7 @@ impl ApplicationService {
         transaction: Arc<AccountsTransactionService>,
         mongo: Arc<MongoDaoImpl>,
         backup: Arc<dyn BackupService>,
+        document_encryption: Arc<DocumentEncryptionService>,
     ) -> Self {
         Self {
             pki,
@@ -51,6 +54,7 @@ impl ApplicationService {
             transaction,
             mongo,
             backup,
+            document_encryption,
         }
     }
 
