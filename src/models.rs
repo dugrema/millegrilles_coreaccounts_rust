@@ -41,3 +41,8 @@ pub struct EvenementMajCompteUsager {
     pub delegations_version: Option<usize>,
     pub delegations_date: Option<usize>,
 }
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EvictUserEvent {
+    pub user_id: String,
+}

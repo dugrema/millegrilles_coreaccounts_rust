@@ -10,7 +10,7 @@ use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRout
 use std::sync::Arc;
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::mongodb::options::{UpdateOneModel, WriteModel};
+use millegrilles_common_rust::mongodb::options::{DeleteManyModel, UpdateOneModel, WriteModel};
 use serde::{Deserialize, Serialize};
 use crate::external::mq::*;
 
@@ -168,11 +168,37 @@ async fn delete_keys(
     Ok(aggregator)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionResetWebauthnUsager {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    #[serde(rename="resetWebauthn")]
+    pub reset_webauthn: Option<bool>,
+    #[serde(rename="evictAllSessions")]
+    pub evict_all_sessions: Option<bool>,
+}
+
 async fn reset_user_webauthn(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+    let transaction_value: TransactionResetWebauthnUsager = wrapper.message.deserialize()?;
+
+    let mut aggregator = TransactionOperationAggregator::new();
+
+    if let Some(true) = transaction_value.reset_webauthn {
+        let collection = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        let filter = doc! { FIELD_USER_ID: transaction_value.user_id.as_str() };
+        let model = WriteModel::DeleteMany(
+            DeleteManyModel::builder()
+                .namespace(collection.namespace())
+                .filter(filter)
+                .build()
+        );
+        aggregator.ordered = Some(vec![model]);
+    }
+
+    Ok(aggregator)
 }
 
 async fn register_otp(

@@ -4,12 +4,13 @@ use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
-use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionSupprimerCles};
+use crate::flow::transactions::{AccountsTransactionService, TransactionInscrireUsager, TransactionResetWebauthnUsager, TransactionSupprimerCles};
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE};
 use millegrilles_common_rust::error::Error as CommonError;
+use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
@@ -23,9 +24,9 @@ use totp_rs::{Algorithm, TOTP, Secret};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RequestChallengeResponse};
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
-use crate::constants::EVENEMENT_INSCRIRE_COMPTE_USAGER;
+use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
 use crate::flow::events::emettre_maj_compte_usager;
-use crate::models::CookieSession;
+use crate::models::{CookieSession, EvictUserEvent};
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -717,7 +718,51 @@ async fn reset_user_webauthn<M>(
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+    let transaction_value: TransactionResetWebauthnUsager = wrapper.message.deserialize()?;
+
+    if ! wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Access denied")).await
+    }
+
+    // Copy information required to finish processing the command after the transaction is saved
+    let delivery_info = wrapper.delivery_info.clone();
+    let user_id = transaction_value.user_id.clone();
+    let reset_webauthn = transaction_value.reset_webauthn.unwrap_or(false);
+    let evict_all_session = transaction_value.evict_all_sessions.unwrap_or(false);
+
+    // Save transaction changes
+    transaction.process_transaction(wrapper.into(), None).await?;
+
+    // Proceed to resets/evictions
+    if reset_webauthn {
+        let filtre = doc! { FIELD_USER_ID: &user_id };
+        let collection = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+        if let Err(e) = collection.delete_many(filtre).await {
+            error!("reset_user_webauthn Erreur delete_many activations {:?}", e);
+        }
+    }
+
+    if evict_all_session {
+        // Supprimer les cookies de sessions longue duree, emettre evenement evict
+        {
+            let filtre = doc! { FIELD_USER_ID: &user_id };
+            let collection = mongo.get_collection(NOM_COLLECTION_COOKIES)?;
+            if let Err(e) = collection.delete_many(filtre).await {
+                error!("reset_user_webauthn Erreur delete_many cookies: {:?}", e);
+            }
+        }
+
+        // Emettre message pour fermer toutes les sessions en cours de l'usager
+        let routage = RoutageMessageAction::builder(
+            DOMAIN_NAME,
+            EVENEMENT_EVICT_USAGER,
+            vec![Securite::L1Public]
+        ).build();
+        let event = EvictUserEvent { user_id };
+        outbound.emit_event(routage, &event).await?;
+    }
+
+    outbound.respond(delivery_info, ErrorMessage::ok()).await
 }
 
 async fn register_otp<M>(
