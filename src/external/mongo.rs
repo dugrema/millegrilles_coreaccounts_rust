@@ -45,6 +45,7 @@ pub const FIELD_DELEGATION_GLOBALE: &str = "delegation_globale";
 pub const FIELD_DELEGATION_VERSION: &str = "delegations_version";
 pub const FIELD_DELEGATION_DATE: &str = "delegations_date";
 pub const FIELD_WEBAUTHN: &str = "webauthn";
+pub const FIELD_PASSKEY: &str = "passkey";
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(
@@ -214,6 +215,16 @@ impl CookieSessionRow {
             expiration: date_expiration,
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TotpCredentialsRow {
+    pub user_id: String,
+    // pub hostname: String,
+    pub correlation: String,
+    pub encrypted_totp_url: EncryptedDocument,
+    #[serde(rename="_mg-creation", with="FromChrono04DateTime")]
+    pub date_creation: DateTime<Utc>,
 }
 
 pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Option<UserAccountRow>, CommonError> {

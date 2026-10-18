@@ -10,10 +10,15 @@ use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRout
 use std::sync::Arc;
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::certificats::VerificateurPermissions;
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::mongodb::options::{DeleteManyModel, UpdateOneModel, WriteModel};
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::mongodb::options::{DeleteManyModel, InsertOneModel, UpdateOneModel, WriteModel};
+use millegrilles_common_rust::redis::transaction;
 use millegrilles_common_rust::tracing::debug;
 use serde::{Deserialize, Serialize};
+use webauthn_rs::prelude::Passkey;
 use crate::external::mq::*;
 
 pub struct AccountsTransactionService {
@@ -119,11 +124,84 @@ async fn register_user(
     Ok(aggregator)
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransactionAddWebauthnKey {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub hostname: String,
+    pub passkey: Passkey,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_cles: Option<bool>,
+}
+
 async fn add_key(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+    let transaction_value: TransactionAddWebauthnKey = wrapper.message.deserialize()?;
+
+    let reset_keys = transaction_value.reset_cles.unwrap_or(false);
+
+    let mut aggregator = TransactionOperationAggregator::new();
+
+    let collection_webauthn = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let collection_totp = mongo.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+
+    let mut ordered_models = Vec::with_capacity(3);
+    // Filter by user_id (re-used)
+    if reset_keys {
+        let filter = doc! { FIELD_USER_ID: &transaction_value.user_id };
+        let model_totp = WriteModel::DeleteMany(
+            DeleteManyModel::builder()
+                .namespace(collection_totp.namespace())
+                .filter(filter.clone())
+                .build()
+        );
+        ordered_models.push(model_totp);
+        let model_webauthn = WriteModel::DeleteMany(
+            DeleteManyModel::builder()
+                .namespace(collection_webauthn.namespace())
+                .filter(filter.clone())
+                .build()
+        );
+        ordered_models.push(model_webauthn);
+    }
+
+    // Always delete the registration challenge
+    let filter = doc!{
+        FIELD_USER_ID: &transaction_value.user_id,
+        FIELD_HOSTNAME: &transaction_value.hostname,
+        FIELD_CHALLENGE_TYPE: "registration"
+    };
+    let collection_challenges = mongo.get_collection(NOM_COLLECTION_CHALLENGES)?;
+    let model_challenges = WriteModel::DeleteMany(
+        DeleteManyModel::builder()
+            .namespace(collection_challenges.namespace())
+            .filter(filter.clone())
+            .build()
+    );
+    ordered_models.push(model_challenges);
+
+    let collection_credentials = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+
+    let cred_doc = doc! {
+        FIELD_USER_ID: &transaction_value.user_id,
+        FIELD_HOSTNAME: &transaction_value.hostname,
+        FIELD_PASSKEY: bson::serialize_to_document(&transaction_value.passkey)?,
+        FIELD_DATE_CREATED: bson::datetime::DateTime::now(),
+    };
+
+    let cred_model = WriteModel::InsertOne(
+        InsertOneModel::builder()
+            .namespace(collection_credentials.namespace())
+            .document(cred_doc)
+            .build()
+    );
+    ordered_models.push(cred_model);
+
+    aggregator.ordered = Some(ordered_models);
+
+    Ok(aggregator)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -167,11 +245,65 @@ async fn update_user_delegations(
     Ok(aggregator)
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TransactionAjouterDelegationSignee {
+    pub confirmation: MessageMilleGrillesOwned,
+    #[serde(rename="userId")]
+    pub user_id: Option<String>,
+    pub hostname: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ConfirmationSigneeDelegationGlobale {
+    #[serde(rename="activerDelegation")]
+    pub activer_delegation: Option<bool>,
+    pub challenge: String,
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+}
+
 async fn add_signed_delegation(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+    let mut transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
+
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(inner) => inner,
+        None => Err(CommonError::Str("User_id missing from certificate"))?
+    };
+
+    let confirmation: ConfirmationSigneeDelegationGlobale = transaction_value.confirmation.deserialize()?;
+
+    // Le filtre agit a la fois sur le nom usager (valide par la cle) et le user_id (valide par serveur)
+    let filter = doc! {
+        FIELD_USER_ID: &user_id,
+        FIELD_USERNAME: &confirmation.nom_usager,
+    };
+    let ops = doc! {
+        "$set": {
+            FIELD_IS_ADMIN: "proprietaire",
+            FIELD_DELEGATION_DATE: bson::datetime::DateTime::now()
+        },
+        "$inc": { FIELD_DELEGATION_VERSION: 1 },
+        "$currentDate": { FIELD_DATE_MODIFIED: true }
+    };
+
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let update_model_versions = WriteModel::UpdateOne(
+        UpdateOneModel::builder()
+            .namespace(collection.namespace())
+            .filter(filter)
+            .update(ops)
+            .build()
+    );
+
+    let mut aggregator = TransactionOperationAggregator::new();
+    aggregator.ordered = Some(vec![update_model_versions]);
+
+    Ok(aggregator)
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -237,9 +369,64 @@ async fn reset_user_webauthn(
     Ok(aggregator)
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+pub struct TransactionRegisterOtp {
+    pub user_id: String,
+    pub hostname: String,
+    pub correlation: String,
+    pub encrypted_totp_url: EncryptedDocument,
+    pub reset_keys: Option<bool>,
+}
+
 async fn register_otp(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-    todo!()
+
+    let transaction_value: TransactionRegisterOtp = wrapper.message.deserialize()?;
+
+    let row = TotpCredentialsRow {
+        user_id: transaction_value.user_id.clone(),
+        correlation: transaction_value.correlation,
+        encrypted_totp_url: transaction_value.encrypted_totp_url,
+        date_creation: Utc::now(),
+    };
+    let collection_totp = mongo.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+
+    let reset_keys = transaction_value.reset_keys.unwrap_or_else(|| false);
+    let mut ordered_models = Vec::with_capacity(3);
+    if reset_keys {
+        // Supprimer toutes les cles pour le user_id dans la collection credentials
+        let filter = doc! { FIELD_USER_ID: &transaction_value.user_id };
+
+        let collection_webauthn = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+        let model = WriteModel::DeleteMany(
+            DeleteManyModel::builder()
+                .namespace(collection_webauthn.namespace())
+                .filter(filter.clone())
+                .build()
+        );
+        ordered_models.push(model);
+
+        let model = WriteModel::DeleteMany(
+            DeleteManyModel::builder()
+                .namespace(collection_totp.namespace())
+                .filter(filter.clone())
+                .build()
+        );
+        ordered_models.push(model);
+    }
+
+    let cred_model = WriteModel::InsertOne(
+        InsertOneModel::builder()
+            .namespace(collection_totp.namespace())
+            .document(bson::serialize_to_document(&row)?)
+            .build()
+    );
+    ordered_models.push(cred_model);
+
+    let mut aggregator = TransactionOperationAggregator::new();
+    aggregator.ordered = Some(ordered_models);
+
+    Ok(aggregator)
 }
