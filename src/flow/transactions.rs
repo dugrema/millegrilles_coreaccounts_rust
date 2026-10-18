@@ -95,7 +95,9 @@ async fn register_user(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
+    let date_created = wrapper.message.estampille.clone();
     let transaction_value: TransactionInscrireUsager = wrapper.message.deserialize()?;
+    debug!("register_user {:?}", transaction_value);
 
     let mut aggregator = TransactionOperationAggregator::new();
 
@@ -106,7 +108,7 @@ async fn register_user(
             FIELD_USER_ID: &transaction_value.user_id,
         },
         "$setOnInsert": {
-            FIELD_DATE_CREATED: bson::datetime::DateTime::now(),
+            FIELD_DATE_CREATED: date_created,
             FIELD_DELEGATION_VERSION: 1,
         },
         "$currentDate": { FIELD_DATE_MODIFIED: true },
@@ -138,6 +140,7 @@ async fn add_key(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
+    let date_created = wrapper.message.estampille.clone();
     let transaction_value: TransactionAddWebauthnKey = wrapper.message.deserialize()?;
 
     let reset_keys = transaction_value.reset_cles.unwrap_or(false);
@@ -188,7 +191,7 @@ async fn add_key(
         FIELD_USER_ID: &transaction_value.user_id,
         FIELD_HOSTNAME: &transaction_value.hostname,
         FIELD_PASSKEY: bson::serialize_to_document(&transaction_value.passkey)?,
-        FIELD_DATE_CREATED: bson::datetime::DateTime::now(),
+        FIELD_DATE_CREATED: date_created,
     };
 
     let cred_model = WriteModel::InsertOne(
@@ -216,13 +219,14 @@ async fn update_user_delegations(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
+    let date_created = wrapper.message.estampille.clone();
     let transaction_value: TransactionMajUsagerDelegations = wrapper.message.deserialize()?;
 
     let filter = doc! { FIELD_USER_ID: transaction_value.user_id.as_str() };
     let set_ops = doc! {
         FIELD_PRIVATE_ACCOUNT: transaction_value.compte_prive,
         FIELD_DELEGATION_GLOBALE: transaction_value.delegation_globale,
-        FIELD_DELEGATION_DATE: bson::datetime::DateTime::now(),
+        FIELD_DELEGATION_DATE: date_created,
     };
     let ops = doc! {
         "$set": set_ops,
@@ -268,11 +272,15 @@ async fn add_signed_delegation(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
+    let date_created = wrapper.message.estampille.clone();
     let mut transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
 
     let user_id = match wrapper.certificate.get_user_id()? {
         Some(inner) => inner,
-        None => Err(CommonError::Str("User_id missing from certificate"))?
+        None => match transaction_value.user_id {
+            Some(inner) => inner,
+            None => Err(CommonError::Str("User_id missing from certificate and transaction"))?
+        }
     };
 
     let confirmation: ConfirmationSigneeDelegationGlobale = transaction_value.confirmation.deserialize()?;
@@ -285,7 +293,7 @@ async fn add_signed_delegation(
     let ops = doc! {
         "$set": {
             FIELD_IS_ADMIN: "proprietaire",
-            FIELD_DELEGATION_DATE: bson::datetime::DateTime::now()
+            FIELD_DELEGATION_DATE: date_created
         },
         "$inc": { FIELD_DELEGATION_VERSION: 1 },
         "$currentDate": { FIELD_DATE_MODIFIED: true }
@@ -382,14 +390,14 @@ async fn register_otp(
     mongo: &dyn MongoDao,
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
-
+    let date_created = wrapper.message.estampille.clone();
     let transaction_value: TransactionRegisterOtp = wrapper.message.deserialize()?;
 
     let row = TotpCredentialsRow {
         user_id: transaction_value.user_id.clone(),
         correlation: transaction_value.correlation,
         encrypted_totp_url: transaction_value.encrypted_totp_url,
-        date_creation: Utc::now(),
+        date_creation: date_created,
     };
     let collection_totp = mongo.get_collection(NOM_COLLECTION_TOTP_CREDENTIALS)?;
 

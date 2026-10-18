@@ -256,7 +256,7 @@ impl ApplicationService {
 
         let start_time = Utc::now();
         let result = self.backup.restore_domain(
-            DOMAIN_NAME_NEW,
+            DOMAIN_NAME,    // use old domain name for backup file compatibility
             COLLECTION_NAME_REDOLOG,
             COLLECTION_NAME_TRACKING,
             resume,
