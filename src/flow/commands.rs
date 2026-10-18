@@ -11,6 +11,7 @@ use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
 use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
+use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
@@ -25,13 +26,14 @@ use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, Passkey
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
 use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
+use crate::document_encryption::DocumentEncryptionService;
 use crate::flow::events::emettre_maj_compte_usager;
 use crate::models::{CookieSession, EvictUserEvent};
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
     pki: &dyn PkiService,
-    chiffrage: &dyn ChiffrageService,
+    encryption: &DocumentEncryptionService,
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
@@ -52,7 +54,7 @@ pub async fn process_command<M>(
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, pki, mongo, outbound, wrapper).await,
                 COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
-                COMMAND_GENERATE_OTP => generate_otp(mongo, outbound, wrapper).await,
+                COMMAND_GENERATE_OTP => generate_otp(mongo,  outbound, encryption, wrapper).await,
                 COMMANDE_SUPPRIMER_COOKIE => delete_cookie(mongo, outbound, wrapper).await,
                 _ => {
                     info!("Unknown action {} for process_command, skipping", action);
@@ -480,6 +482,7 @@ struct ResponseGenerateOtp {
 async fn generate_otp<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
+    encryption: &DocumentEncryptionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
     let command: CommandGenerateOtp = wrapper.message.deserialize()?;
@@ -487,51 +490,11 @@ async fn generate_otp<M>(
         Some(inner) => inner.to_owned(),
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "user_id missing from certificate, access denied")).await
     };
-    let user_account = match load_user_by_id(mongo, user_id.as_str()).await? {
-        Some(account) => account,
-        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    if get_username_for_userid(mongo, user_id.as_str()).await.is_err() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
     };
 
-    let generated_totp = generate_totp(mongo, command.username.as_str(), user_id.as_str(), command.hostname.as_str()).await?;
-
-    //     let username = commande.username.as_str();
-    //     let hostname = commande.hostname.as_str();
-
-
-
-
-    //     // Save the user_id/secret for potential new TOTP credentials.
-    //     let secret_string = secret.to_string();
-    //     debug!("command_generate_otp New secret: {:?}", secret_string);
-    //
-    //     let authenticator_id = format!("{}", username);
-    //
-    //     let totp = TOTP::new(
-    //         Algorithm::SHA512,
-    //         6,
-    //         1,
-    //         30,
-    //         secret.to_bytes().unwrap(),
-    //         Some(hostname.to_string()),
-    //         authenticator_id
-    //     ).unwrap();
-    //
-    //     let totp_url = totp.get_url();
-    //     debug!("TOTP url: {}", totp_url);
-    //     // Hash the url to obfuscate the secret
-    //     let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
-    //
-    //     // Encrypt the TOTP url, it contains the secret value
-    //     let encrypted_url = gestionnaire.encrypt_string(middleware, totp_url).await?;
-    //
-    //     let challenge_row = DocChallenge::new_challenge_totp(&user_id, hostname, &challenge_hashvalue, encrypted_url);
-    //     let collection = middleware.get_collection_typed::<DocChallenge>(NOM_COLLECTION_CHALLENGES)?;
-    //     collection.insert_one_with_session(challenge_row, None, session).await?;
-    //
-    //     // let token = totp.generate_current().unwrap();
-    //     let qr_base64 = totp.get_qr_base64().expect("totp.get_qr_base64");
-    //     let secret_base32 = totp.get_secret_base32();
-    //     debug!("New TOTP base32 secret: {}, base 64 QR: {}", secret_base32, qr_base64);
+    let generated_totp = generate_totp(mongo, encryption, command.username.as_str(), user_id.as_str(), command.hostname.as_str()).await?;
 
     let response = ResponseGenerateOtp {
         correlation: generated_totp.challenge_hashvalue,
