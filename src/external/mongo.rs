@@ -41,6 +41,7 @@ pub const FIELD_FINGERPRINT_PK: &str = "fingerprint_pk";
 pub const FIELD_DATE_CREATED: &str = "created";
 pub const FIELD_DATE_MODIFIED: &str = "last_modified";
 pub const FIELD_LAST_AUTH: &str = "last_successful_authentication";
+pub const FIELD_LAST_HOSTNAME: &str = "last_successful_hostname";
 pub const FIELD_DELEGATION_GLOBALE: &str = "delegation_globale";
 pub const FIELD_DELEGATION_VERSION: &str = "delegations_version";
 pub const FIELD_DELEGATION_DATE: &str = "delegations_date";

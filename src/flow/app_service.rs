@@ -212,6 +212,7 @@ impl ApplicationService {
                         self.mongo.as_ref(),
                         self.pki.as_ref(),
                         self.outbound.as_ref(),
+                        self.document_encryption.as_ref(),
                         self.transaction.as_ref(),
                         message
                     ).await {

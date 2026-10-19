@@ -34,6 +34,12 @@ pub async fn process_ticker_job(
         warn!("Error emitting domain presence: {}", e);
     }
 
+    // Database maintenance
+
+    warn!("TODO - database maintenace");
+
+    // Backup handling
+
     if minute % 30 == 4 {
         // {
         // Run complete backup once a week on Sunday at 7:04 UTC.

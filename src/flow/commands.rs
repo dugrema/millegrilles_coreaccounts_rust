@@ -15,6 +15,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::tracing::{debug, error, info, warn};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
@@ -52,7 +53,7 @@ pub async fn process_command<M>(
                 COMMANDE_SIGNER_COMPTE_PAR_PROPRIETAIRE => sign_account_by_admin(pki, mongo, outbound, wrapper).await,
                 COMMANDE_AJOUTER_CSR_RECOVERY => add_csr_recovery(outbound, mongo, wrapper).await,
                 COMMANDE_AUTHENTIFIER_WEBAUTHN => authenticate_webauthn(config, pki, mongo, outbound, wrapper).await,
-                COMMAND_AUTHENTICATE_TOTP => authenticate_totp(outbound, wrapper).await,
+                COMMAND_AUTHENTICATE_TOTP => authenticate_totp(mongo, outbound, encryption, wrapper).await,
                 COMMANDE_GENERER_CHALLENGE => generate_challenge(config, mongo, outbound, wrapper).await,
                 COMMAND_GENERATE_OTP => generate_otp(mongo,  outbound, encryption, wrapper).await,
                 COMMANDE_SUPPRIMER_COOKIE => delete_cookie(mongo, outbound, wrapper).await,
@@ -371,12 +372,116 @@ async fn authenticate_webauthn<M>(
     outbound.respond(wrapper.delivery_info, response).await
 }
 
-async fn authenticate_totp(
+#[derive(Deserialize)]
+struct CommandAuthenticateOtp {
+    #[serde(rename = "userId")]
+    user_id: String,
+    hostname: String,
+    #[serde(rename = "totpCode")]
+    totp_code: String,
+    #[serde(rename = "certificateRequest")]
+    certificate_request: Option<DemandeSignatureCertificatWebauthn>,
+    #[serde(rename = "sessionDuration", skip_serializing_if = "Option::is_none")]
+    session_duration: Option<i64>,
+}
+
+#[derive(Serialize)]
+struct TotpAuthenticationResponse {
+    ok: bool,
+    user_verified: bool,
+    cookie: Option<CookieSession>,
+    certificat: Option<Vec<String>>,
+}
+
+async fn authenticate_totp<M>(
+    mongo: &M,
     outbound: &MessageOutboundFacade,
+    encryption: &DocumentEncryptionService,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> {
-    todo!()
-    // let command: DemandeSignature = wrapper.message.deserialize()?;
+) -> Result<(), CommonError> where M: MongoDaoTyped {
+    let command: CommandAuthenticateOtp = wrapper.message.deserialize()?;
+
+    let account = match load_user_by_id(mongo, command.user_id.as_str()).await? {
+        Some(account) => account,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    };
+
+    let mut valid_totp: Option<TotpCredentialsRow> = None;
+
+    let collection = mongo.get_collection_typed::<TotpCredentialsRow>(NOM_COLLECTION_TOTP_CREDENTIALS)?;
+    let filtre = doc!{"user_id": &command.user_id};
+    let mut cursor = collection.find(filtre).await?;
+    while let Some(row) = cursor.next().await {
+        let row = row?;
+        let totp_url_string: String = encryption.decrypt(&row.encrypted_totp_url).await?;
+        let totp = match TOTP::from_url(&totp_url_string) {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}: {:?}", row.user_id, e);
+                continue;
+            }
+        };
+        match totp.check_current(command.totp_code.as_str()) {
+            Ok(true) => {
+                valid_totp = Some(row);    // Code is verified and valid
+                break
+            }
+            Ok(false) => continue,
+            Err(e) => {
+                warn!("command_authenticate_otp Error validating TOTP code: {:?}", e);
+                continue
+            }
+        }
+    }
+
+    let totp = match valid_totp {
+        Some(totp) => totp,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Invalid TOTP code / No credentials matched")).await
+    };
+
+    let filtre = doc! {
+        FIELD_USER_ID: &command.user_id,
+        FIELD_CORRELATION: &totp.correlation,
+    };
+    debug!("Update TOTP access date for: {:?}", filtre);
+    let ops = doc! {
+        "$set": {
+            FIELD_LAST_AUTH: Utc::now(),
+            FIELD_LAST_HOSTNAME: &command.hostname,
+        }
+    };
+    collection.update_one(filtre, ops).await?;
+
+    let mut response = TotpAuthenticationResponse {
+        ok: true,
+        user_verified: true,
+        cookie: None,
+        certificat: None
+    };
+
+    if let Some(certificate_request) = command.certificate_request {
+        // Generate a new certificate
+        let certificate = signer_certificat_usager(
+            outbound,
+            account.nom_usager.as_str(),
+            command.user_id.as_str(),
+            certificate_request.csr.as_str(),
+            Some(&account)
+        ).await?;
+        // Save new certificate in response
+        response.certificat = Some(certificate.certificat);
+    }
+
+    if let Some(session_duration) = command.session_duration {
+        match creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), session_duration).await {
+            Ok(cookie) => {
+                response.cookie = Some(cookie.into());
+            },
+            Err(e) => warn!("Error creating session cookie: {:?}", e)
+        }
+    }
+
+    outbound.respond(wrapper.delivery_info, response).await
 }
 
 #[derive(Deserialize)]
@@ -541,6 +646,7 @@ pub async fn process_transaction<M>(
     mongo: &M,
     pki: &dyn PkiService,
     outbound: &MessageOutboundFacade,
+    encryption: &DocumentEncryptionService,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated
 ) -> Result<(), CommonError> where M: MongoDaoTyped
@@ -559,7 +665,7 @@ pub async fn process_transaction<M>(
                 TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(config, mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_SUPPRIMER_CLES => delete_keys(outbound, transaction, wrapper).await,
                 TRANSACTION_RESET_WEBAUTHN_USAGER => reset_user_webauthn(mongo, outbound, transaction, wrapper).await,
-                TRANSACTION_REGISTER_OTP => register_otp(mongo, outbound, transaction, wrapper).await,
+                TRANSACTION_REGISTER_OTP => register_otp(mongo, outbound, encryption, transaction, wrapper).await,
                 _ => {
                     info!("Unknown action {} for process_transaction, skipping", action);
                     Ok(())
@@ -915,11 +1021,94 @@ async fn reset_user_webauthn<M>(
     outbound.respond(delivery_info, ErrorMessage::ok()).await
 }
 
+#[derive(Clone, Serialize, Deserialize)]
+struct CommandRegisterOtp {
+    code: String,
+    hostname: String,
+    correlation: String,
+    reset_keys: Option<bool>,
+}
+
 async fn register_otp<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
+    encryption: &DocumentEncryptionService,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+    let command: CommandRegisterOtp = wrapper.message.deserialize()?;
+
+    // Authorization
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(user_id) => user_id,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "User_id missing from certificate")).await
+    };
+    if get_username_for_userid(mongo, user_id.as_str()).await.is_err() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    }
+
+    let filter = doc!{
+        FIELD_USER_ID: &user_id,
+        FIELD_CHALLENGE_TYPE: "totp",
+        FIELD_HOSTNAME: &command.hostname,
+        FIELD_CHALLENGE: &command.correlation
+    };
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let challenge = match collection.find_one(filter).await {
+        Ok(Some(inner)) => inner,
+        Ok(None) => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Challenge not found")).await,
+        Err(e) => {
+            error!("register_otp Error loading challenge: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "Error loading challenge")).await
+        },
+    };
+
+    let (totp_url_vec, encrypted_totp_url) = match challenge.totp_url_encrypted {
+        Some(totp) => match encryption.decrypt::<String>(&totp).await {
+            Ok(inner) => (inner.as_bytes().to_vec(), totp),
+            Err(e) => {
+                error!("Error decrypting TOTP url: {:?}", e);
+                return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "Error decrypting challenge")).await
+            }
+        },
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "Missing TOTP information")).await
+    };
+    let totp_url = String::from_utf8(totp_url_vec)?;
+    let totp = match TOTP::from_url(&totp_url) {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("TOTP URL loading error: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "TOTP loading error")).await
+        }
+    };
+
+    let current_code = match totp.check_current(command.code.as_str()) {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("TOTP checking error - invalid time: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "TOTP expired")).await
+        }
+    };
+
+    if ! current_code {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "TOTP invalid code")).await
+    }
+
+    // Process new transaction
+    let transaction_new = TransactionRegisterOtp {
+        user_id,
+        hostname: command.hostname,
+        correlation: command.correlation,
+        encrypted_totp_url,
+        reset_keys: command.reset_keys,
+    };
+
+    transaction.process_value(
+        DOMAIN_NAME,
+        TRANSACTION_REGISTER_OTP,
+        serde_json::to_value(&transaction_new)?,
+        None
+    ).await?;
+
+    outbound.respond(wrapper.delivery_info, ErrorMessage::ok()).await
 }

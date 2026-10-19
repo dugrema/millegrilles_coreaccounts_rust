@@ -109,10 +109,10 @@ impl DocumentEncryptionService {
         Ok(encrypted_document)
     }
 
-    pub async fn decrypt<S,D>(
+    pub async fn decrypt<D>(
         &self,
         value: &EncryptedDocument
-    ) -> Result<D, CommonError> where S: Serialize, D: DeserializeOwned {
+    ) -> Result<D, CommonError> where D: DeserializeOwned {
         let key_id = match value.cle_id.as_ref() {
             Some(key_id) => key_id,
             None => return Err(CommonError::Str("Key id not provided"))
