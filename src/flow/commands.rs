@@ -1,10 +1,10 @@
-use millegrilles_common_rust::{bson, serde_json};
+use millegrilles_common_rust::{bson, chrono, hex, serde_json};
 use millegrilles_common_rust::bson::doc;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge, verify_registration_challenge};
+use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge, verify_registration_challenge, WebauthnChallengeRow};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
-use crate::flow::transactions::{AccountsTransactionService, TransactionAddWebauthnKey, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
+use crate::flow::transactions::{AccountsTransactionService, ConfirmationSigneeDelegationGlobale, TransactionAddWebauthnKey, TransactionAjouterDelegationSignee, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
 use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
@@ -12,10 +12,10 @@ use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIET
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
-use millegrilles_common_rust::tracing::{debug, error, info};
+use millegrilles_common_rust::tracing::{debug, error, info, warn};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
@@ -25,7 +25,7 @@ use totp_rs::{Algorithm, TOTP, Secret};
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
-use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
+use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER, EVENEMENT_MAJ_COMPTE_USAGER};
 use crate::document_encryption::DocumentEncryptionService;
 use crate::flow::events::emettre_maj_compte_usager;
 use crate::models::{CookieSession, EvictUserEvent};
@@ -556,7 +556,7 @@ pub async fn process_transaction<M>(
                 TRANSACTION_INSCRIRE_USAGER => register_user(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_AJOUTER_CLE => add_key(config, mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_MAJ_USAGER_DELEGATIONS => update_user_delegations(mongo, outbound, transaction, wrapper).await,
-                TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(mongo, outbound, transaction, wrapper).await,
+                TRANSACTION_AJOUTER_DELEGATION_SIGNEE => add_signed_delegation(config, mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_SUPPRIMER_CLES => delete_keys(outbound, transaction, wrapper).await,
                 TRANSACTION_RESET_WEBAUTHN_USAGER => reset_user_webauthn(mongo, outbound, transaction, wrapper).await,
                 TRANSACTION_REGISTER_OTP => register_otp(mongo, outbound, transaction, wrapper).await,
@@ -761,12 +761,73 @@ async fn update_user_delegations<M>(
 }
 
 async fn add_signed_delegation<M>(
+    config: &dyn ConfigService,
     mongo: &M,
     outbound: &MessageOutboundFacade,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
-    todo!()
+    // Check message structure
+    let transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
+    let mut signed_command = transaction_value.confirmation;
+    let add_delegation_command: ConfirmationSigneeDelegationGlobale = signed_command.deserialize()?;
+
+    // Authorization
+    let user_id = match wrapper.certificate.get_user_id()? {
+        Some(user_id) => user_id,
+        None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "User_id missing from certificate")).await
+    };
+    if get_username_for_userid(mongo, user_id.as_str()).await.is_err() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    }
+
+    // Validate the encapsulated signed message
+    if add_delegation_command.user_id.as_str() != user_id.as_str() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Mismatch with user_id (certificate != signed command)")).await
+    }
+
+    // S'assurer que la signature est recente (moins de 2 minutes, ajustement 10 secondes futur max)
+    let date_signature = &signed_command.estampille;
+    let now = Utc::now();
+    if now - chrono::Duration::minutes(2) > *date_signature || now + chrono::Duration::seconds(10) < *date_signature {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Registration challenge expired")).await
+    }
+
+    // Validate la pubkey, this message must be signed by the master key.
+    let ca_cert = config.get_configuration_pki().get_enveloppe_privee().enveloppe_ca.clone();
+    let ca_pubkey = ca_cert.pubkey()?;
+    let message_pubkey = hex::decode(&signed_command.pubkey)?;
+    if ca_pubkey.as_slice() != message_pubkey.as_slice() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Registration challenge key is wrong (must be master key)")).await
+    }
+
+    // Cryptographic check
+    if signed_command.verifier_signature().is_err() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(400, "Registration challenge signature is invalid")).await
+    }
+
+    let hostname = transaction_value.hostname.as_str();
+    let challenge = add_delegation_command.challenge.as_str();
+
+    // Verify database challenge
+    let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
+    let filtre = doc! {
+        FIELD_USER_ID: &user_id,
+        FIELD_CHALLENGE_TYPE: "delegation",
+        FIELD_HOSTNAME: hostname,
+        FIELD_CHALLENGE: challenge
+    };
+    if collection.find_one(filtre.clone()).await?.is_none() {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Challenge is unknown or expired")).await
+    };
+    collection.delete_one(filtre).await?;   // Delete challenge, avoids replay attacks
+
+    let delivery_info = wrapper.delivery_info.clone();
+    transaction.process_transaction(wrapper.into(), None).await?;
+
+    // Send update events to account listeners
+    let user_account = emettre_maj_compte_usager(mongo, outbound, user_id.as_str(), None).await?;
+    outbound.respond(delivery_info, user_account).await
 }
 
 async fn delete_keys(
