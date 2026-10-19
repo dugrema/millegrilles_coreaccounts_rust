@@ -1055,6 +1055,11 @@ async fn register_otp<M>(
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
     }
 
+    // Only user accounts (from browsers) can register OTP credentials
+    if ! wrapper.certificate.verifier_roles_string(vec!["navigateur".to_string()])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Not authorized")).await
+    }
+
     let filter = doc!{
         FIELD_USER_ID: &user_id,
         FIELD_CHALLENGE_TYPE: "totp",
