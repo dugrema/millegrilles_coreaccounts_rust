@@ -66,8 +66,6 @@ pub async fn process_command<M>(
             Ok(())
         }
     }
-
-
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -513,9 +511,6 @@ async fn generate_challenge<M>(
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
     let command: CommandeGenererChallenge = wrapper.message.deserialize()?;
 
-    //     let commande: CommandeGenererChallenge = message_contenu.deserialize()?;
-    //     let hostname = commande.hostname.as_str();
-    //
     let user_id = match wrapper.certificate.get_user_id()? {
         Some(inner) => inner.to_owned(),
         None => {
@@ -687,9 +682,17 @@ async fn register_user<M>(
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
     let transaction_value: TransactionInscrireUsager = wrapper.message.deserialize()?;
 
+    if ! wrapper.certificate.verifier_exchanges(vec![Securite::L2Prive, Securite::L1Public])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Unauthorized")).await
+    } else if ! wrapper.certificate.verifier_roles_string(vec!["protected_webapi".to_string(), "private_webapi".to_string()])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Unauthorized")).await
+    }
+
     if check_username_existence(mongo, transaction_value.nom_usager.as_str()).await? {
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(409, "User already registered")).await
     }
+
+    debug!("Registering new user {}", transaction_value.nom_usager);
 
     let csr = match transaction_value.csr {
         Some(csr) => csr,
@@ -794,6 +797,11 @@ async fn add_key<M>(
     };
     if get_username_for_userid(mongo, user_id.as_str()).await.is_err() {
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Unknown user account")).await
+    }
+
+    // Only user accounts (from browsers) can add new Webauthn keys
+    if ! wrapper.certificate.verifier_roles_string(vec!["navigateur".to_string()])? {
+        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(401, "Not authorized")).await
     }
 
     let fingerprint_pk = wrapper.certificate.fingerprint_pk()?;
