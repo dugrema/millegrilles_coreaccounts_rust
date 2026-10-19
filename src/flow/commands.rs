@@ -1,11 +1,11 @@
+use crate::auth::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
 use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
+use crate::auth::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, WebauthnChallengeRow, preparer_authentification_webauthn, preparer_challenge_generique, preparer_registration_webauthn, verify_authentication_challenge, verify_certificate_signature_challenge, verify_registration_challenge};
 use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
 use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, WebauthnChallengeRow, preparer_authentification_webauthn, preparer_challenge_generique, preparer_registration_webauthn, verify_authentication_challenge, verify_certificate_signature_challenge, verify_registration_challenge};
-use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
 use crate::flow::events::emettre_maj_compte_usager;
 use crate::flow::transactions::{AccountsTransactionService, ConfirmationSigneeDelegationGlobale, TransactionAddWebauthnKey, TransactionAjouterDelegationSignee, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
 use crate::models::{CookieSession, EvictUserEvent};

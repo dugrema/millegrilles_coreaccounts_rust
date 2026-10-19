@@ -1,25 +1,25 @@
-use std::collections::HashMap;
+use crate::auth::webauthn::{WebauthnCredentialsRow, prepare_registration, prepare_webauthn_authentication};
+use crate::constants::DELEGATION_OWNER;
+use crate::external::mongo::*;
+use crate::external::mq::*;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::VerificateurPermissions;
+use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_seconds_option};
 use millegrilles_common_rust::chrono::{DateTime, Utc};
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats};
-use crate::external::mq::*;
+use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats, Securite};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageKind;
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
 use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::tracing::{debug, info};
+use millegrilles_common_rust::v3::ConfigService;
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::optionepochseconds;
-use millegrilles_common_rust::tokio_stream::StreamExt;
-use millegrilles_common_rust::v3::ConfigService;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
-use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_seconds_option};
-use crate::constants::DELEGATION_OWNER;
-use crate::external::mongo::*;
-use crate::external::webauthn::{prepare_registration, prepare_webauthn_authentication, WebauthnCredentialsRow};
 
 pub async fn process_request<M>(
     config: &dyn ConfigService,

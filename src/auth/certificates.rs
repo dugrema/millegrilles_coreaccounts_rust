@@ -1,18 +1,18 @@
+use crate::auth::webauthn::DemandeSignatureCertificatWebauthn;
+use crate::constants::*;
+use crate::external::mongo::*;
+use crate::models::*;
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::chrono::{Duration, Utc};
-use millegrilles_common_rust::constantes::{Securite, DOMAINE_PKI};
-use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
-use millegrilles_common_rust::tracing::debug;
+use millegrilles_common_rust::constantes::{DOMAINE_PKI, Securite};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
-use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
+use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
+use millegrilles_common_rust::tracing::debug;
 use millegrilles_common_rust::v3::PkiService;
+use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use serde::{Deserialize, Serialize};
-use crate::constants::*;
-use crate::external::mongo::*;
-use crate::external::webauthn::DemandeSignatureCertificatWebauthn;
-use crate::models::*;
 
 pub async fn signer_demande_certificat_usager<M>(
     pki: &dyn PkiService,
