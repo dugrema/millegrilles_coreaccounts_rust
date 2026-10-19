@@ -284,7 +284,6 @@ async fn add_signed_delegation(
     let transaction_value: TransactionAjouterDelegationSignee = match wrapper.message.deserialize() {
         Ok(inner) => inner,
         Err(e) => {
-            error!("Error content {}", wrapper.message.contenu);
             let error_string = e.to_string();
             if error_string.contains("id") || error_string.contains("hostname") {
                 warn!("Ignoring old add_signed_delegation transaction id:{} that use the old message content style: {:?}", wrapper.message.id, e);
