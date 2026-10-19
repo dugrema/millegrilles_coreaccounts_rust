@@ -1,6 +1,6 @@
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::chrono::{Duration, Utc};
 use millegrilles_common_rust::constantes::{Securite, DOMAINE_PKI};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::tracing::debug;
@@ -145,6 +145,34 @@ pub async fn ajouter_fingerprint_pk_usager(
         .update_one(filtre, ops)
         .upsert(true)
         .await?;
+
+    Ok(())
+}
+
+pub async fn cleanup_activations(mongo: &dyn MongoDao) -> Result<(), CommonError> {
+    // Activations expire after a week when not replaced by stronger method (OTP, webauthn)
+    let expiration = Utc::now() - Duration::days(7);
+    debug!("Cleanup expired activations as of {}", expiration);
+
+    let expiration_bson: bson::DateTime = bson::DateTime::from_chrono(expiration);
+    let filter = doc! { FIELD_DATE_CREATED: {"$lt": expiration_bson } };
+
+    let collection = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+    collection.delete_many(filter).await?;
+
+    Ok(())
+}
+
+pub async fn cleanup_recovery(mongo: &dyn MongoDao) -> Result<(), CommonError> {
+    // Recovery codes expire after 1 day when not consumed
+    let expiration = Utc::now() - Duration::days(1);
+    debug!("Cleanup expired recovery codes as of {}", expiration);
+
+    let expiration_bson: bson::DateTime = bson::DateTime::from_chrono(expiration);
+    let filter = doc! { FIELD_DATE_CREATED: {"$lt": expiration_bson } };
+
+    let collection = mongo.get_collection(NOM_COLLECTION_RECOVERY)?;
+    collection.delete_many(filter).await?;
 
     Ok(())
 }

@@ -46,6 +46,77 @@ pub const FIELD_DELEGATION_VERSION: &str = "delegations_version";
 pub const FIELD_DELEGATION_DATE: &str = "delegations_date";
 pub const FIELD_WEBAUTHN: &str = "webauthn";
 pub const FIELD_PASSKEY: &str = "passkey";
+pub const FIELD_EXPIRATION: &str = "expiration";
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserAccountRow {
+    #[serde(rename="nomUsager")]
+    pub nom_usager: String,
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub compte_prive: Option<bool>,
+    pub delegation_globale: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
+    pub delegations_date: Option<DateTime<Utc>>,
+    pub delegations_version: Option<usize>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ActivationFingerprintPkUsagerRow {
+    #[serde(rename="userId")]
+    pub user_id: String,
+    pub fingerprint_pk: String,
+    #[serde(with = "FromChrono04DateTime")]
+    pub created: DateTime<Utc>,
+    pub certificat: Option<Vec<String>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoveryRow {
+    #[serde(rename="nomUsager")]
+    pub username: String,
+    pub code: String,
+    pub csr: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CookieSessionRow {
+    pub user_id: String,
+    pub hostname: String,
+    pub challenge: String,
+    #[serde(with = "FromChrono04DateTime")]
+    pub created: DateTime<Utc>,
+    #[serde(with = "FromChrono04DateTime")]
+    pub expiration: DateTime<Utc>,
+}
+
+impl CookieSessionRow {
+    pub fn new(user_id: &str, hostname: &str, duree_session: i64) -> Self {
+        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
+
+        let mut buffer_challenge = [0u8; 32];
+        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
+        let challenge = base64_url::encode(&buffer_challenge[..]);
+
+        Self {
+            user_id: user_id.into(),
+            hostname: hostname.into(),
+            challenge,
+            created: Utc::now(),
+            expiration: date_expiration,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TotpCredentialsRow {
+    pub user_id: String,
+    // pub hostname: String,
+    pub correlation: String,
+    pub encrypted_totp_url: EncryptedDocument,
+    #[serde(with="FromChrono04DateTime")]
+    pub created: DateTime<Utc>,
+}
 
 pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> {
     db.create_index(
@@ -155,76 +226,6 @@ pub async fn create_index_mongodb(db: &dyn MongoDao) -> Result<(), CommonError> 
     ).await?;
 
     Ok(())
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct UserAccountRow {
-    #[serde(rename="nomUsager")]
-    pub nom_usager: String,
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub compte_prive: Option<bool>,
-    pub delegation_globale: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none", with="option_chrono_04_datetime")]
-    pub delegations_date: Option<DateTime<Utc>>,
-    pub delegations_version: Option<usize>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct ActivationFingerprintPkUsagerRow {
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub fingerprint_pk: String,
-    #[serde(with = "FromChrono04DateTime")]
-    pub created: DateTime<Utc>,
-    pub certificat: Option<Vec<String>>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct RecoveryRow {
-    #[serde(rename="nomUsager")]
-    pub username: String,
-    pub code: String,
-    pub csr: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct CookieSessionRow {
-    pub user_id: String,
-    pub hostname: String,
-    pub challenge: String,
-    #[serde(with = "FromChrono04DateTime")]
-    pub created: DateTime<Utc>,
-    #[serde(with = "FromChrono04DateTime")]
-    pub expiration: DateTime<Utc>,
-}
-
-impl CookieSessionRow {
-    pub fn new(user_id: &str, hostname: &str, duree_session: i64) -> Self {
-        let date_expiration = Utc::now() + chrono::Duration::seconds(duree_session);
-
-        let mut buffer_challenge = [0u8; 32];
-        openssl::rand::rand_bytes(&mut buffer_challenge).expect("openssl::random::rand_bytes");
-        let challenge = base64_url::encode(&buffer_challenge[..]);
-
-        Self {
-            user_id: user_id.into(),
-            hostname: hostname.into(),
-            challenge,
-            created: Utc::now(),
-            expiration: date_expiration,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct TotpCredentialsRow {
-    pub user_id: String,
-    // pub hostname: String,
-    pub correlation: String,
-    pub encrypted_totp_url: EncryptedDocument,
-    #[serde(with="FromChrono04DateTime")]
-    pub created: DateTime<Utc>,
 }
 
 pub async fn load_user_by_id(mongo: &dyn MongoDao, user_id: &str) -> Result<Option<UserAccountRow>, CommonError> {

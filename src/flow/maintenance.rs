@@ -5,12 +5,17 @@ use millegrilles_common_rust::chrono::{Datelike, Duration, Timelike, Utc, Weekda
 use millegrilles_common_rust::common_messages::BackupEvent;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::messages_generiques::MessageCedule;
+use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::tracing::{debug, error, info, warn};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::{BackupService, PresenceService};
+use crate::auth::challenges::cleanup_challenges;
+use crate::auth::cookie::cleanup_expired_cookies;
+use crate::flow::certificates::{cleanup_activations, cleanup_recovery};
 
 pub async fn process_ticker_job(
+    mongo: &dyn MongoDao,
     outbound: &MessageOutboundFacade,
     backup: &dyn BackupService,
     trigger: MessageValidated
@@ -36,10 +41,25 @@ pub async fn process_ticker_job(
 
     // Database maintenance
 
-    warn!("TODO - database maintenace");
+    if minute % 10 == 6 {
+        if let Err(e) = cleanup_challenges(mongo).await {
+            error!("Error cleaning up expired challenges: {:?}", e);
+        }
+    }
+
+    if minute == 5 {
+        if let Err(e) = cleanup_expired_cookies(mongo).await {
+            error!("Error cleaning up expired cookies: {:?}", e);
+        }
+        if let Err(e) = cleanup_activations(mongo).await {
+            error!("Error cleaning up expired activations: {:?}", e);
+        }
+        if let Err(e) = cleanup_recovery(mongo).await {
+            error!("Error cleaning up expired recovery codes: {:?}", e);
+        }
+    }
 
     // Backup handling
-
     if minute % 30 == 4 {
         // {
         // Run complete backup once a week on Sunday at 7:04 UTC.
