@@ -25,6 +25,7 @@ use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFaca
 use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ConfigService, PkiService};
 use millegrilles_common_rust::{bson, chrono, hex, serde_json};
+use millegrilles_common_rust::tokio::io::duplex;
 use serde::{Deserialize, Serialize};
 use totp_rs::TOTP;
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
@@ -122,6 +123,7 @@ async fn sign_user_account<M>(
         mongo,
         outbound,
         &account,
+        None,
         &command.demande_certificat
     ).await?;
 
@@ -159,6 +161,7 @@ async fn sign_account_by_admin<M>(
         mongo,
         outbound,
         &account,
+        None,
         &command.demande_certificat
     ).await?;
 
@@ -352,18 +355,27 @@ async fn authenticate_webauthn<M>(
         cookie: None
     };
 
+    // Set certificate duration to match session, default (None) means 90 days
+    let certificate_duration_days = match command.commande_webauthn.duree_session {
+        Some(duration_seconds) => Some( ((duration_seconds / 86_400) + 1) as u16 ),
+        None => None
+    };
+
     if let Some(demande_certificat) = command.commande_webauthn.demande_certificat {
         let signed_certificate_response = signer_demande_certificat_usager(
             pki,
             mongo,
             outbound,
             &user_account,
+            certificate_duration_days,
             &demande_certificat
         ).await?;
         response.certificat = Some(signed_certificate_response.certificat);
     }
 
     if let Some(duree_session) = command.commande_webauthn.duree_session {
+
+
         let cookie = creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), duree_session).await?;
         response.cookie = Some(cookie.into());
     }
@@ -460,13 +472,22 @@ async fn authenticate_totp<M>(
 
     if let Some(certificate_request) = command.certificate_request {
         // Generate a new certificate
+
+        // Set certificate duration to match session, default (None) means 90 days
+        let certificate_duration_days = match command.session_duration {
+            Some(duration_seconds) => Some( ((duration_seconds / 86_400) + 1) as u16 ),
+            None => None
+        };
+
         let certificate = signer_certificat_usager(
             outbound,
             account.nom_usager.as_str(),
             command.user_id.as_str(),
             certificate_request.csr.as_str(),
+            certificate_duration_days,
             Some(&account)
         ).await?;
+
         // Save new certificate in response
         response.certificat = Some(certificate.certificat);
     }
@@ -709,6 +730,7 @@ async fn register_user<M>(
         transaction_value.nom_usager.as_str(),
         transaction_value.user_id.as_str(),
         csr.as_str(),
+        None,
         None
     ).await?;
     ajouter_fingerprint_pk_usager(mongo, transaction_value.user_id.as_str(), fingerprint_pk.as_str()).await?;

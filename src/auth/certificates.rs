@@ -19,12 +19,13 @@ pub async fn signer_demande_certificat_usager<M>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
     compte_usager: &UserAccountRow,
+    duration_days: Option<u16>,
     demande_certificat: &DemandeSignatureCertificatWebauthn
 ) -> Result<ReponseCertificatSigne, CommonError> where M: MongoDaoTyped {
     let nom_usager = &compte_usager.nom_usager;
     let user_id = &compte_usager.user_id;
     let certificate_response = signer_certificat_usager(
-        outbound, nom_usager, user_id, demande_certificat.csr.as_str(), Some(&compte_usager)).await?;
+        outbound, nom_usager, user_id, demande_certificat.csr.as_str(), duration_days, Some(&compte_usager)).await?;
 
     // Ajouter flag tiers si active d'un autre appareil que l'origine du CSR
     debug!("commande_signer_compte_usager Activation tierce : {:?}", demande_certificat.activation_tierce);
@@ -71,10 +72,12 @@ struct CommandeSignatureUsager {
     delegation_globale: Option<String>,
     compte_prive: Option<bool>,
     delegations_version: Option<usize>,
+    /// Duration in days
+    duration: Option<u16>,
 }
 
 impl CommandeSignatureUsager {
-    fn new(nom_usager: &str, user_id: &str, csr: &str, compte: Option<&UserAccountRow>) -> Self {
+    fn new(nom_usager: &str, user_id: &str, csr: &str, duration_days: Option<u16>, compte: Option<&UserAccountRow>) -> Self {
         let (compte_prive, delegation_globale, delegations_version) = match compte {
             Some(inner) => {
                 (inner.compte_prive.to_owned(), inner.delegation_globale.to_owned(), inner.delegations_version.to_owned())
@@ -89,6 +92,7 @@ impl CommandeSignatureUsager {
             delegation_globale,
             compte_prive,
             delegations_version,
+            duration: duration_days,
         }
     }
 }
@@ -105,13 +109,14 @@ pub async fn signer_certificat_usager(
     nom_usager: &str,
     user_id: &str,
     csr: &str,
+    duration_days: Option<u16>,
     compte: Option<&UserAccountRow>
 ) -> Result<ReponseCertificatSigne, CommonError> {
     let nom_usager_str = nom_usager.as_ref();
     let user_id_str = user_id.as_ref();
     let csr_str = csr.as_ref();
 
-    let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, compte);
+    let commande_signature = CommandeSignatureUsager::new(nom_usager_str, user_id_str, csr_str, duration_days, compte);
 
     // Une erreur est survenue dans le post, fallback vers noeuds 4.secure (si presents)
     let routage = RoutageMessageAction::builder(
