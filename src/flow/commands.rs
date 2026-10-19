@@ -373,10 +373,17 @@ async fn authenticate_webauthn<M>(
         response.certificat = Some(signed_certificate_response.certificat);
     }
 
-    if let Some(duree_session) = command.commande_webauthn.duree_session {
+    if let Some(mut session_duration) = command.commande_webauthn.duree_session {
+        if let Some(delegation) = user_account.delegation_globale.as_ref() {
+            if delegation.as_str() == DELEGATION_GLOBALE_PROPRIETAIRE {
+                if session_duration > 86_400 {
+                    // Clamp admin sessions to 1 day, the certificate will not be signed for longer anyway
+                    session_duration = 86_400;
+                }
+            }
+        }
 
-
-        let cookie = creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), duree_session).await?;
+        let cookie = creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), session_duration).await?;
         response.cookie = Some(cookie.into());
     }
 
@@ -492,7 +499,17 @@ async fn authenticate_totp<M>(
         response.certificat = Some(certificate.certificat);
     }
 
-    if let Some(session_duration) = command.session_duration {
+    if let Some(mut session_duration) = command.session_duration {
+
+        if let Some(delegation) = account.delegation_globale.as_ref() {
+            if delegation.as_str() == DELEGATION_GLOBALE_PROPRIETAIRE {
+                if session_duration > 86_400 {
+                    // Clamp admin sessions to 1 day, the certificate will not be signed for longer anyway
+                    session_duration = 86_400;
+                }
+            }
+        }
+
         match creer_session_cookie(mongo, command.user_id.as_str(), command.hostname.as_str(), session_duration).await {
             Ok(cookie) => {
                 response.cookie = Some(cookie.into());
