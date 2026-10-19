@@ -30,7 +30,7 @@ services:
       - MG_REDIS_URL=rediss://client_rust@redis:6379#insecure
       - MG_REDIS_PASSWORD_FILE=/run/secrets/redis.txt
       - MG_CERTISSUER_URL=http://certissuer:2080
-      - RUST_LOG=error,millegrilles_common_rust=warn,millegrilles_corepki_rust=info
+      - RUST_LOG=error,millegrilles_common_rust=warn,millegrilles_coreaccounts_rust=info
     volumes:
       - ${MILLEGRILLES_ROOT}/var/backup/domains:/var/opt/millegrilles/archives
     deploy:
