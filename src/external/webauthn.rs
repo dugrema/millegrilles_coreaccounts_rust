@@ -7,7 +7,6 @@ use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::Encryp
 use millegrilles_common_rust::{chrono, openssl, serde_json, uuid};
 use millegrilles_common_rust::v3::ConfigService;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
-use millegrilles_common_rust::common_messages::DemandeSignature;
 use millegrilles_common_rust::formatteur_messages::preparer_btree_recursif;
 use millegrilles_common_rust::hachages::hacher_bytes_vu8;
 use millegrilles_common_rust::tracing::{debug, info};
@@ -16,8 +15,8 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
 use millegrilles_common_rust::multihash::Code;
 use millegrilles_common_rust::serde_json::{json, Value};
-use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
-use webauthn_rs::prelude::{AuthenticationResult, Base64UrlSafeData, CreationChallengeResponse, CredentialID, Passkey, PasskeyAuthentication, PasskeyRegistration, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
+use millegrilles_common_rust::chrono::serde::ts_seconds;
+use webauthn_rs::prelude::*;
 use webauthn_rs::{Webauthn, WebauthnBuilder};
 use crate::external::mongo::*;
 use crate::error::Error as CoreError;

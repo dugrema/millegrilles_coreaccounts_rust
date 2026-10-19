@@ -31,18 +31,6 @@ impl From<CookieSessionRow> for CookieSession {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct EvenementMajCompteUsager {
-    #[serde(rename="nomUsager")]
-    pub nom_usager: String,
-    #[serde(rename="userId")]
-    pub user_id: String,
-    pub compte_prive: Option<bool>,
-    pub delegation_globale: Option<String>,
-    pub delegations_version: Option<usize>,
-    pub delegations_date: Option<usize>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EvictUserEvent {
     pub user_id: String,
 }

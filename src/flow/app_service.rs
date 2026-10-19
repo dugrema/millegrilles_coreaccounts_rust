@@ -1,6 +1,13 @@
 use crate::constants::*;
+use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::*;
 use crate::external::mq::*;
+use crate::flow::backup::process_backup;
+use crate::flow::commands::{process_command, process_transaction};
+use crate::flow::events::process_events;
+use crate::flow::maintenance::process_ticker_job;
+use crate::flow::requests::process_request;
+use crate::flow::transactions::AccountsTransactionService;
 use millegrilles_common_rust::chrono::Utc;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::mongo_dao::MongoDaoImpl;
@@ -14,14 +21,7 @@ use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFaca
 use millegrilles_common_rust::v3::impls::backup_restorer::RestorationState;
 use millegrilles_common_rust::v3::impls::messaging_service::MessagingServiceImpl;
 use millegrilles_common_rust::v3::{BackupService, ChiffrageService, ConfigService, PkiService};
-use std::sync::{Arc, Mutex};
-use crate::document_encryption::DocumentEncryptionService;
-use crate::flow::backup::process_backup;
-use crate::flow::commands::{process_command, process_transaction};
-use crate::flow::events::process_events;
-use crate::flow::maintenance::process_ticker_job;
-use crate::flow::requests::process_request;
-use crate::flow::transactions::AccountsTransactionService;
+use std::sync::Arc;
 
 /// Handles queue consumer threads, calls individual routing methods
 pub struct ApplicationService {
@@ -127,9 +127,7 @@ impl ApplicationService {
             match result {
                 Ok(message) => {
                     if let Err(e) = process_events(
-                        self.config.as_ref(),
                         self.chiffrage.as_ref(),
-                        self.outbound.as_ref(),
                         message,
                     ).await {
                         error!("Ticker job failed: {}", e);
@@ -210,7 +208,6 @@ impl ApplicationService {
                     if let Err(e) = process_transaction(
                         self.config.as_ref(),
                         self.mongo.as_ref(),
-                        self.pki.as_ref(),
                         self.outbound.as_ref(),
                         self.document_encryption.as_ref(),
                         self.transaction.as_ref(),

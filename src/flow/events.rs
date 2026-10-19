@@ -1,23 +1,18 @@
-use crate::external::mq::*;
-use millegrilles_common_rust::error::Error as CommonError;
-use millegrilles_common_rust::tracing::{debug, info, warn};
-use millegrilles_common_rust::v3::{ChiffrageService, ConfigService};
-use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
-use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
-use std::sync::Mutex;
-use millegrilles_common_rust::bson::doc;
-use millegrilles_common_rust::constantes::Securite;
-use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
-use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
 use crate::constants::*;
 use crate::external::mongo::*;
+use crate::external::mq::*;
 use crate::flow::requests::UserAccountResponse;
-use crate::models::EvenementMajCompteUsager;
+use millegrilles_common_rust::constantes::Securite;
+use millegrilles_common_rust::error::Error as CommonError;
+use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
+use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
+use millegrilles_common_rust::tracing::{debug, info, warn};
+use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
+use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
+use millegrilles_common_rust::v3::ChiffrageService;
 
 pub async fn process_events(
-    config: &dyn ConfigService,
     chiffrage: &dyn ChiffrageService,
-    outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> {
     let action = match wrapper.get_routing_action() {

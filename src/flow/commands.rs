@@ -1,18 +1,21 @@
-use millegrilles_common_rust::{bson, chrono, hex, serde_json};
-use millegrilles_common_rust::bson::doc;
+use crate::auth::cookie::creer_session_cookie;
+use crate::auth::totp::generate_totp;
+use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
+use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::*;
 use crate::external::mq::*;
-use crate::external::webauthn::{preparer_challenge_generique, verify_certificate_signature_challenge, ClientAssertionResponse, DemandeSignatureCertificatWebauthn, preparer_registration_webauthn, preparer_authentification_webauthn, verify_authentication_challenge, verify_registration_challenge, WebauthnChallengeRow};
+use crate::external::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, WebauthnChallengeRow, preparer_authentification_webauthn, preparer_challenge_generique, preparer_registration_webauthn, verify_authentication_challenge, verify_certificate_signature_challenge, verify_registration_challenge};
 use crate::flow::certificates::{ajouter_fingerprint_pk_usager, signer_certificat_usager, signer_demande_certificat_usager};
+use crate::flow::events::emettre_maj_compte_usager;
 use crate::flow::transactions::{AccountsTransactionService, ConfirmationSigneeDelegationGlobale, TransactionAddWebauthnKey, TransactionAjouterDelegationSignee, TransactionInscrireUsager, TransactionMajUsagerDelegations, TransactionRegisterOtp, TransactionResetWebauthnUsager, TransactionSupprimerCles};
-use millegrilles_common_rust::certificats::{charger_csr, VerificateurPermissions, get_csr_subject, calculer_fingerprint_pk, csr_calculer_fingerprintpk};
+use crate::models::{CookieSession, EvictUserEvent};
+use millegrilles_common_rust::bson::doc;
+use millegrilles_common_rust::certificats::{VerificateurPermissions, calculer_fingerprint_pk, charger_csr, csr_calculer_fingerprintpk, get_csr_subject};
 use millegrilles_common_rust::chrono::Utc;
-use millegrilles_common_rust::common_messages::ReponseSignatureCertificat;
-use millegrilles_common_rust::constantes::{Securite, DELEGATION_GLOBALE_PROPRIETAIRE, RolesCertificats};
+use millegrilles_common_rust::constantes::{DELEGATION_GLOBALE_PROPRIETAIRE, Securite};
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::generateur_messages::RoutageMessageAction;
-use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageKind, MessageValidable};
 use millegrilles_common_rust::mongo_dao::{MongoDao, MongoDaoTyped};
 use millegrilles_common_rust::serde_json::json;
 use millegrilles_common_rust::tokio_stream::StreamExt;
@@ -20,16 +23,11 @@ use millegrilles_common_rust::tracing::{debug, error, info, warn};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
-use millegrilles_common_rust::v3::{ChiffrageService, ConfigService, PkiService};
+use millegrilles_common_rust::v3::{ConfigService, PkiService};
+use millegrilles_common_rust::{bson, chrono, hex, serde_json};
 use serde::{Deserialize, Serialize};
-use totp_rs::{Algorithm, TOTP, Secret};
-use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PasskeyAuthentication, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
-use crate::auth::cookie::creer_session_cookie;
-use crate::auth::totp::generate_totp;
-use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER, EVENEMENT_MAJ_COMPTE_USAGER};
-use crate::document_encryption::DocumentEncryptionService;
-use crate::flow::events::emettre_maj_compte_usager;
-use crate::models::{CookieSession, EvictUserEvent};
+use totp_rs::TOTP;
+use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 
 pub async fn process_command<M>(
     config: &dyn ConfigService,
@@ -318,10 +316,13 @@ async fn authenticate_webauthn<M>(
         idmg.as_str(),
         command.commande_webauthn.demande_certificat.as_ref(),
         command.commande_webauthn.webauthn.try_into()
-            .map_err(|e| CommonError::Str("Error mapping command.commande_webauthn.webauthn to ClientAuthentificationWebauthn"))?,
+            .map_err(|e| CommonError::String(format!("Error mapping command.commande_webauthn.webauthn to ClientAuthentificationWebauthn: {:?}", e)))?,
     ).await {
         Ok(result) => result,
-        Err(e) => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await
+        Err(e) => {
+            warn!("verify_authentication_challenge Error: {:?}", e);
+            return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await
+        }
     };
 
     // Supprimer challenge pour eviter reutilisation
@@ -644,7 +645,6 @@ async fn delete_cookie(
 pub async fn process_transaction<M>(
     config: &dyn ConfigService,
     mongo: &M,
-    pki: &dyn PkiService,
     outbound: &MessageOutboundFacade,
     encryption: &DocumentEncryptionService,
     transaction: &AccountsTransactionService,

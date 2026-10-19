@@ -22,7 +22,6 @@ use millegrilles_common_rust::v3::impls::security_service::SecurityServiceImpl;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService};
 use std::sync::Arc;
 use crate::document_encryption::DocumentEncryptionService;
-use crate::constants::DOMAIN_NAME;
 use crate::external::mongo::*;
 
 pub struct AppContext {

@@ -8,7 +8,6 @@ use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
 use serde::{Deserialize, Serialize};
-use webauthn_rs::prelude::{CreationChallengeResponse, PasskeyAuthentication, PasskeyRegistration, RequestChallengeResponse};
 
 pub const COLLECTION_NAME_REDOLOG: &str = "CoreAccounts/redolog";
 pub const COLLECTION_NAME_TRACKING: &str = "CoreAccounts/tracking";

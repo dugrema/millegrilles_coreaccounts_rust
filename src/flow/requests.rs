@@ -16,7 +16,7 @@ use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::v3::ConfigService;
 use serde::{Deserialize, Serialize};
 use webauthn_rs::prelude::{CreationChallengeResponse, RequestChallengeResponse};
-use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_milliseconds, ts_seconds_option};
+use millegrilles_common_rust::chrono::serde::{ts_seconds, ts_seconds_option};
 use crate::constants::DELEGATION_OWNER;
 use crate::external::mongo::*;
 use crate::external::webauthn::{prepare_registration, prepare_webauthn_authentication, WebauthnCredentialsRow};

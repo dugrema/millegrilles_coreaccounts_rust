@@ -1,25 +1,23 @@
 use crate::external::mongo::*;
+use crate::external::mq::*;
 use millegrilles_common_rust::async_trait::async_trait;
-use millegrilles_common_rust::error::Error as CommonError;
-use millegrilles_common_rust::mongo_dao::MongoDao;
-use millegrilles_common_rust::mongodb::ClientSession;
-use millegrilles_common_rust::serde_json::Value;
-use millegrilles_common_rust::v3::impls::transaction_service::TransactionServiceImpl;
-use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
-use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
-use std::sync::Arc;
 use millegrilles_common_rust::bson;
 use millegrilles_common_rust::bson::doc;
 use millegrilles_common_rust::certificats::VerificateurPermissions;
-use millegrilles_common_rust::chrono::Utc;
+use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
-use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::{MessageMilleGrillesOwned, MessageValidable};
+use millegrilles_common_rust::millegrilles_cryptographie::messages_structs::MessageMilleGrillesOwned;
+use millegrilles_common_rust::mongo_dao::MongoDao;
+use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{DeleteManyModel, InsertOneModel, UpdateOneModel, WriteModel};
-use millegrilles_common_rust::redis::transaction;
+use millegrilles_common_rust::serde_json::Value;
 use millegrilles_common_rust::tracing::debug;
+use millegrilles_common_rust::v3::impls::transaction_service::TransactionServiceImpl;
+use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
+use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 use webauthn_rs::prelude::Passkey;
-use crate::external::mq::*;
 
 pub struct AccountsTransactionService {
     pub transaction: Arc<dyn TransactionService>,
@@ -30,9 +28,9 @@ impl AccountsTransactionService {
         config: Arc<dyn ConfigService>,
         format: Arc<dyn FormatService>,
         mongo: Arc<dyn MongoDao>,
-        restoring: bool,
+        _restoring: bool,
     ) -> Self {
-        let router = AccountsTransactionRouter { mongo: mongo.clone(), ignore_duplicates: restoring };
+        let router = AccountsTransactionRouter { mongo: mongo.clone() };
         let service = TransactionServiceImpl::new(
             config,
             format,
@@ -56,7 +54,7 @@ impl AccountsTransactionService {
 
 struct AccountsTransactionRouter {
     mongo: Arc<dyn MongoDao>,
-    ignore_duplicates: bool,
+    // ignore_duplicates: bool,
 }
 
 #[async_trait]
@@ -273,7 +271,7 @@ async fn add_signed_delegation(
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
     let date_created = wrapper.message.estampille.clone();
-    let mut transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
+    let transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
 
     let user_id = match wrapper.certificate.get_user_id()? {
         Some(inner) => inner,
