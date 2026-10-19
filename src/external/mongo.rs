@@ -7,7 +7,10 @@ use millegrilles_common_rust::mongo_dao::{ChampIndex, IndexOptions, MongoDao};
 use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
 use millegrilles_common_rust::bson::serde_helpers::datetime::FromChrono04DateTime;
 use millegrilles_common_rust::millegrilles_cryptographie::chiffrage_docs::EncryptedDocument;
+use millegrilles_common_rust::tokio_stream::StreamExt;
 use serde::{Deserialize, Serialize};
+use crate::auth::webauthn::WebauthnCredentialsRow;
+use crate::constants::DELEGATION_OWNER;
 
 pub const COLLECTION_NAME_REDOLOG: &str = "CoreAccounts/redolog";
 pub const COLLECTION_NAME_TRACKING: &str = "CoreAccounts/tracking";
@@ -263,4 +266,78 @@ pub async fn get_username_for_userid(mongo: &dyn MongoDao, user_id: &str) -> Res
         },
         None => Err(CommonError::Str("Unknown user_id"))
     }
+}
+
+pub async fn get_recovery_code(mongo: &dyn MongoDao, username: &str, code: &str) -> Result<Option<RecoveryRow>, CommonError> {
+    let filtre = doc! { FIELD_USERNAME: username, FIELD_CODE: code };
+    let collection = mongo.get_collection(NOM_COLLECTION_RECOVERY)?;
+    match collection.find_one(filtre).await? {
+        Some(c) => Ok(Some(bson::deserialize_from_document(c)?)),
+        None => Ok(None)
+    }
+}
+
+pub async fn get_admin_acounts(mongo: &dyn MongoDao) -> Result<Vec<UserAccountRow>, CommonError> {
+    let filtre = doc! { FIELD_IS_ADMIN: DELEGATION_OWNER };
+    let collection = mongo.get_collection(COLLECTION_NAME_ACCOUNTS)?;
+    let mut curseur = collection
+        .find(filtre)
+        .projection(doc! {
+            FIELD_USERNAME: true,
+            FIELD_USER_ID: true,
+        })
+        .await?;
+
+    let mut accounts: Vec<UserAccountRow> = Vec::new();
+    while let Some(account) = curseur.next().await {
+        accounts.push(bson::deserialize_from_document(account?)?);
+    }
+
+    Ok(accounts)
+}
+
+pub async fn get_cookie(mongo: &dyn MongoDao, user_id: &str, hostname: &str, challenge: &str) -> Result<Option<CookieSessionRow>, CommonError> {
+    let filter = doc! {
+        FIELD_USER_ID: user_id,
+        FIELD_HOSTNAME: hostname,
+        FIELD_CHALLENGE: challenge,
+    };
+    let collection = mongo.get_collection(NOM_COLLECTION_COOKIES)?;
+    match collection.find_one(filter).await? {
+        Some(cookie) => Ok(bson::deserialize_from_document(cookie)?),
+        None => Ok(None)
+    }
+}
+
+pub async fn get_user_webauthn_credentials(mongo: &dyn MongoDao, user_id: &str) -> Result<Vec<WebauthnCredentialsRow>, CommonError> {
+    let filter = doc! { FIELD_USER_ID: user_id };
+    let collection = mongo.get_collection(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
+    let mut rows: Vec<WebauthnCredentialsRow> = Vec::new();
+    let mut cursor = collection.find(filter).await?;
+    while let Some(row) = cursor.next().await {
+        rows.push(bson::deserialize_from_document(row?)?);
+    }
+    Ok(rows)
+}
+
+pub async fn get_user_activations(mongo: &dyn MongoDao, user_id: &str) -> Result<Vec<ActivationFingerprintPkUsagerRow>, CommonError> {
+    let filter = doc! { FIELD_USER_ID: user_id };
+    let collection = mongo.get_collection(NOM_COLLECTION_ACTIVATIONS)?;
+    let mut rows: Vec<ActivationFingerprintPkUsagerRow> = Vec::new();
+    let mut cursor = collection.find(filter).await?;
+    while let Some(row) = cursor.next().await {
+        rows.push(bson::deserialize_from_document(row?)?);
+    }
+    Ok(rows)
+}
+
+pub async fn get_user_cookies(mongo: &dyn MongoDao, user_id: &str) -> Result<Vec<CookieSessionRow>, CommonError> {
+    let filter = doc! { FIELD_USER_ID: user_id };
+    let collection = mongo.get_collection(NOM_COLLECTION_COOKIES)?;
+    let mut rows: Vec<CookieSessionRow> = Vec::new();
+    let mut cursor = collection.find(filter).await?;
+    while let Some(row) = cursor.next().await {
+        rows.push(bson::deserialize_from_document(row?)?);
+    }
+    Ok(rows)
 }

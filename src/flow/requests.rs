@@ -1,5 +1,4 @@
 use crate::auth::webauthn::{WebauthnCredentialsRow, prepare_registration, prepare_webauthn_authentication};
-use crate::constants::DELEGATION_OWNER;
 use crate::external::mongo::*;
 use crate::external::mq::*;
 use millegrilles_common_rust::bson::doc;
@@ -181,13 +180,10 @@ async fn request_load_user<M>(
         let user_id = account.user_id.as_str();
 
         debug!("Load activations for account {}", user_id);
-        let filtre = doc!{ FIELD_USER_ID: user_id };
-        let collection = mongo.get_collection_typed::<ActivationFingerprintPkUsagerRow>(NOM_COLLECTION_ACTIVATIONS)?;
+        let activation_rows = get_user_activations(mongo, user_id).await?;
         let mut activations = HashMap::new();
-        let mut curseur = collection.find(filtre).await?;
-        while let Some(r) = curseur.next().await {
-            let row = r?;
-            activations.insert(row.fingerprint_pk.clone(), row);
+        for activation in activation_rows {
+            activations.insert(activation.fingerprint_pk.clone(), activation);
         }
         response.activations = Some(activations);
 
@@ -353,13 +349,11 @@ async fn request_get_csr_recovery_bycode<M>(
     let request: RequestCsrRecoveryByCode = wrapper.message.deserialize()?;
 
     // Verifier si on a un usager avec delegation globale (permet d'utiliser le parametre nom_usager)
-    let collection_accounts = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
     let effective_username = match (request.nom_usager, wrapper.certificate.verifier_delegation_globale(DELEGATION_GLOBALE_PROPRIETAIRE)?) {
         (Some(username), true) => username,
         _ => match wrapper.certificate.get_user_id()? {
             Some(user_id) => {
-                let filtre = doc! { FIELD_USER_ID: &user_id };
-                match collection_accounts.find_one(filtre).await? {
+                match load_user_by_id(mongo, user_id.as_str()).await? {
                     Some(account) => account.nom_usager,
                     None => {
                         // Access refused, unknown username
@@ -374,9 +368,7 @@ async fn request_get_csr_recovery_bycode<M>(
         },
     };
 
-    let filtre = doc! { FIELD_USERNAME: &effective_username, FIELD_CODE: &request.code };
-    let collection_recovery = mongo.get_collection_typed::<RecoveryRow>(NOM_COLLECTION_RECOVERY)?;
-    match collection_recovery.find_one(filtre).await? {
+    match get_recovery_code(mongo, effective_username.as_str(), request.code.as_str()).await? {
         Some(row) => {
             let response = ResponseCsrRecoveryByCode {
                 ok: true,
@@ -397,20 +389,11 @@ async fn request_list_admins<M>(
 ) -> Result<(), CommonError> where M: MongoDaoTyped {
     let _request: RequestUserList = wrapper.message.deserialize()?;
 
-    let filtre = doc! { FIELD_IS_ADMIN: DELEGATION_OWNER };
-    let collection = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
-    let mut curseur = collection
-        .find(filtre)
-        .projection(doc! {
-            FIELD_USERNAME: true,
-            FIELD_USER_ID: true,
-        })
-        .await?;
-
-    let mut accounts: Vec<UserAccountResponse> = Vec::new();
-    while let Some(account) = curseur.next().await {
-        accounts.push(account?.into());
-    }
+    let account_rows = get_admin_acounts(mongo).await?;
+    let accounts: Vec<UserAccountResponse> = account_rows
+        .into_iter()
+        .map(|row| row.into())
+        .collect();
 
     let response = ResponseUserList { ok: true, complet: true, usagers: accounts };
     outbound.respond(wrapper.delivery_info, response).await
@@ -463,25 +446,14 @@ async fn request_user_cookie<M>(
         return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "Access denied")).await;
     }
 
-    let filter = doc! {
-        "user_id": request.user_id,
-        "hostname": request.hostname,
-        "challenge": request.challenge,
-    };
-    let collection = mongo.get_collection_typed::<CookieSessionRow>(NOM_COLLECTION_COOKIES)?;
-    let cookie: CookieSessionResponse = match collection.find_one(filter).await? {
+    let cookie = get_cookie(mongo, request.user_id.as_str(), request.hostname.as_str(), request.challenge.as_str()).await?;
+    let cookie: CookieSessionResponse = match cookie {
         Some(cookie) => cookie.into(),
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(404, "Cookie not found")).await
     };
 
-    // Get username
-    let filter_user = doc! {FIELD_USER_ID: &cookie.user_id};
-    let collection_users = mongo.get_collection_typed::<UserAccountRow>(COLLECTION_NAME_ACCOUNTS)?;
-    let user_account = collection_users
-        .find_one(filter_user)
-        .projection(doc! { FIELD_USERNAME: true, FIELD_USER_ID: true })
-        .await?;
-
+    // Get user account
+    let user_account = load_user_by_id(mongo, cookie.user_id.as_str()).await?;
     match user_account {
         Some(user_account) => {
             let response = ResponseGetUserCookie { ok: true, username: user_account.nom_usager, cookie };
@@ -588,39 +560,14 @@ async fn request_user_passkeys<M>(
         false => user_id.to_owned()
     };
 
-    let filter = doc! { FIELD_USER_ID: &user_id };
-    let mut passkeys: Vec<PasskeyResponse> = Vec::new();
-    let collection = mongo.get_collection_typed::<WebauthnCredentialsRow>(NOM_COLLECTION_WEBAUTHN_CREDENTIALS)?;
-    let mut curseur = collection.find(filter.clone()).await?;
-    while let Some(cred) = curseur.next().await {
-        let cred = cred?;
-        passkeys.push(cred.into());
-    }
+    let webauthn_credentials = get_user_webauthn_credentials(mongo, user_id.as_str()).await?;
+    let passkeys: Vec<PasskeyResponse> = webauthn_credentials.into_iter().map(|e| e.into()).collect();
 
-    let activations = {
-        let mut activations: Vec<ActivationReponse> = Vec::new();
-        let collection = mongo.get_collection_typed::<ActivationFingerprintPkUsagerRow>(NOM_COLLECTION_ACTIVATIONS)?;
-        let mut curseur = collection.find(filter).await?;
-        while let Some(activation) = curseur.next().await {
-            let activation = activation?;
-            activations.push(activation.into());
-        }
-        activations
-    };
+    let activation_rows = get_user_activations(mongo, user_id.as_str()).await?;
+    let activations: Vec<ActivationReponse> = activation_rows.into_iter().map(|e| e.into()).collect();
 
-    let cookies: Vec<CookieReponse> = {
-        let mut cookies = Vec::new();
-        let collection = mongo.get_collection_typed::<CookieSessionRow>(NOM_COLLECTION_COOKIES)?;
-        let filter = doc! { "user_id": &user_id };
-        let mut curseur = collection.find(filter).await?;
-        while let Some(cookie) = curseur.next().await {
-            let cookie = cookie?;
-            debug!("get_passkeys_usager Activation : {:?}", cookie);
-            cookies.push(cookie.into());
-        }
-
-        cookies
-    };
+    let cookie_rows = get_user_cookies(mongo, user_id.as_str()).await?;
+    let cookies: Vec<CookieReponse> = cookie_rows.into_iter().map(|e| e.into()).collect();
 
     let reponse = ResponseGetUserPasskeys { ok: true, user_id: user_id.to_owned(), passkeys, activations, cookies };
     outbound.respond(wrapper.delivery_info, reponse).await
