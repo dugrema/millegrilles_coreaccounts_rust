@@ -11,7 +11,7 @@ use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{DeleteManyModel, InsertOneModel, UpdateOneModel, WriteModel};
 use millegrilles_common_rust::serde_json::Value;
-use millegrilles_common_rust::tracing::debug;
+use millegrilles_common_rust::tracing::{debug, error, warn};
 use millegrilles_common_rust::v3::impls::transaction_service::TransactionServiceImpl;
 use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
 use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
@@ -139,7 +139,17 @@ async fn add_key(
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
     let date_created = wrapper.message.estampille.clone();
-    let transaction_value: TransactionAddWebauthnKey = wrapper.message.deserialize()?;
+
+    let transaction_value: TransactionAddWebauthnKey = match wrapper.message.deserialize() {
+        Ok(inner) => inner,
+        Err(e) => {
+            if e.to_string().contains("userId") {
+                warn!("Ignoring old ajouterCle transaction id:{} that is missing userId: {:?}", wrapper.message.id, e);
+                return Ok(TransactionOperationAggregator::new());
+            }
+            Err(e)?  // Raise error again
+        }
+    };
 
     let reset_keys = transaction_value.reset_cles.unwrap_or(false);
 
@@ -271,7 +281,19 @@ async fn add_signed_delegation(
     wrapper: TransactionWrapper,
 ) -> Result<TransactionOperationAggregator, CommonError> {
     let date_created = wrapper.message.estampille.clone();
-    let transaction_value: TransactionAjouterDelegationSignee = wrapper.message.deserialize()?;
+    let transaction_value: TransactionAjouterDelegationSignee = match wrapper.message.deserialize() {
+        Ok(inner) => inner,
+        Err(e) => {
+            error!("Error content {}", wrapper.message.contenu);
+            let error_string = e.to_string();
+            if error_string.contains("id") || error_string.contains("hostname") {
+                warn!("Ignoring old add_signed_delegation transaction id:{} that use the old message content style: {:?}", wrapper.message.id, e);
+                return Ok(TransactionOperationAggregator::new());
+            }
+            Err(e)?  // Raise error again
+        }
+    };
+
 
     let user_id = match wrapper.certificate.get_user_id()? {
         Some(inner) => inner,
