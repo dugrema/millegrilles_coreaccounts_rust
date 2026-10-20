@@ -657,6 +657,7 @@ async fn delete_cookie(
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
 ) -> Result<(), CommonError> {
+    debug!("Command delete cookie: {}", wrapper.message.contenu);
     let command: CommandDeleteCookie = wrapper.message.deserialize()?;
 
     if ! wrapper.certificate.verifier_exchanges(vec![Securite::L3Protege, Securite::L2Prive, Securite::L1Public])? {
@@ -669,9 +670,15 @@ async fn delete_cookie(
         "challenge": command.challenge,
     };
     let collection = mongo.get_collection(NOM_COLLECTION_COOKIES)?;
-    collection.delete_one(filtre).await?;
+    let result = collection.delete_one(filtre).await?;
+    debug!("{} cookie deleted", result.deleted_count);
 
-    outbound.respond(wrapper.delivery_info, ErrorMessage::ok()).await
+    // Check if a reply is needed (this may be an event)
+    if wrapper.delivery_info.properties.correlation_id().is_some() {
+        outbound.respond(wrapper.delivery_info, ErrorMessage::ok()).await?;
+    }
+
+    Ok(())
 }
 
 
