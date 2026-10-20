@@ -3,7 +3,6 @@ use crate::auth::cookie::creer_session_cookie;
 use crate::auth::totp::generate_totp;
 use crate::auth::webauthn::{ClientAssertionResponse, DemandeSignatureCertificatWebauthn, WebauthnChallengeRow, preparer_authentification_webauthn, preparer_challenge_generique, preparer_registration_webauthn, verify_authentication_challenge, verify_certificate_signature_challenge, verify_registration_challenge};
 use crate::constants::{DOMAIN_NAME, EVENEMENT_EVICT_USAGER, EVENEMENT_INSCRIRE_COMPTE_USAGER};
-use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::flow::events::emettre_maj_compte_usager;
@@ -23,23 +22,20 @@ use millegrilles_common_rust::tracing::{debug, error, info, warn};
 use millegrilles_common_rust::v3::facades::message_inbound::MessageValidated;
 use millegrilles_common_rust::v3::facades::message_outbound::MessageOutboundFacade;
 use millegrilles_common_rust::v3::models::ErrorMessage;
-use millegrilles_common_rust::v3::{ConfigService, PkiService};
+use millegrilles_common_rust::v3::{ConfigService, DocumentEncryptionService, PkiService};
 use millegrilles_common_rust::{bson, chrono, hex, serde_json};
-use millegrilles_common_rust::tokio::io::duplex;
 use serde::{Deserialize, Serialize};
 use totp_rs::TOTP;
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 
-pub async fn process_command<M>(
+pub async fn process_command<M,E>(
     config: &dyn ConfigService,
     pki: &dyn PkiService,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     mongo: &M,
     outbound: &MessageOutboundFacade,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where
-    M: MongoDaoTyped,
-{
+) -> Result<(), CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     let action = match wrapper.get_routing_action() {
         Some(action) => action,
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err("No action provided in command")).await
@@ -411,12 +407,12 @@ struct TotpAuthenticationResponse {
     certificat: Option<Vec<String>>,
 }
 
-async fn authenticate_totp<M>(
+async fn authenticate_totp<M,E>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where M: MongoDaoTyped {
+) -> Result<(), CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     let command: CommandAuthenticateOtp = wrapper.message.deserialize()?;
 
     let account = match load_user_by_id(mongo, command.user_id.as_str()).await? {
@@ -431,12 +427,18 @@ async fn authenticate_totp<M>(
     let mut cursor = collection.find(filtre).await?;
     while let Some(row) = cursor.next().await {
         let row = row?;
-        let totp_url_string: String = encryption.decrypt(&row.encrypted_totp_url).await?;
+        let totp_url_string: String = match encryption.decrypt(&row.encrypted_totp_url).await {
+            Ok(inner) => inner,
+            Err(e) => {
+                warn!("command_authenticate_otp Error decrypting TOTP URL for user_id:{}: {:?}\n{:?}", row.user_id, e, row);
+                continue
+            }
+        };
         let totp = match TOTP::from_url(&totp_url_string) {
             Ok(inner) => inner,
             Err(e) => {
                 warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}: {:?}", row.user_id, e);
-                continue;
+                continue
             }
         };
         match totp.check_current(command.totp_code.as_str()) {
@@ -618,12 +620,12 @@ struct ResponseGenerateOtp {
     secret_base32: String,
 }
 
-async fn generate_otp<M>(
+async fn generate_otp<M,E>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where M: MongoDaoTyped {
+) -> Result<(), CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     let command: CommandGenerateOtp = wrapper.message.deserialize()?;
     let user_id = match wrapper.certificate.get_user_id()? {
         Some(inner) => inner.to_owned(),
@@ -675,14 +677,14 @@ async fn delete_cookie(
 
 /// Process the command part of the transaction (checks, validations, volatile updates),
 /// calls transaction processor and then handles responses and emits events.
-pub async fn process_transaction<M>(
+pub async fn process_transaction<M,E>(
     config: &dyn ConfigService,
     mongo: &M,
     outbound: &MessageOutboundFacade,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated
-) -> Result<(), CommonError> where M: MongoDaoTyped
+) -> Result<(), CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService
 {
     let action = match wrapper.get_routing_action() {
         Some(action) => action,
@@ -1076,13 +1078,13 @@ struct CommandRegisterOtp {
     reset_keys: Option<bool>,
 }
 
-async fn register_otp<M>(
+async fn register_otp<M,E>(
     mongo: &M,
     outbound: &MessageOutboundFacade,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     transaction: &AccountsTransactionService,
     wrapper: MessageValidated,
-) -> Result<(), CommonError> where M: MongoDaoTyped {
+) -> Result<(), CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     let command: CommandRegisterOtp = wrapper.message.deserialize()?;
 
     // Authorization

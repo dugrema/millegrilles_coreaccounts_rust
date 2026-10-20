@@ -1,11 +1,11 @@
 use crate::auth::webauthn::WebauthnChallengeRow;
-use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::NOM_COLLECTION_CHALLENGES;
 use millegrilles_common_rust::base64_url;
 use millegrilles_common_rust::error::Error as CommonError;
 use millegrilles_common_rust::millegrilles_cryptographie::hachages::HachageCode;
 use millegrilles_common_rust::millegrilles_cryptographie::hachages::hacher_bytes;
 use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
+use millegrilles_common_rust::v3::DocumentEncryptionService;
 use totp_rs::{Algorithm, Secret, TOTP};
 
 pub struct GeneratedTotp {
@@ -14,13 +14,13 @@ pub struct GeneratedTotp {
     pub qr_base64: String,
 }
 
-pub async fn generate_totp<M>(
+pub async fn generate_totp<M,E>(
     mongo: &M,
-    encryption: &DocumentEncryptionService,
+    encryption: &E,
     username: &str,
     user_id: &str,
     hostname: &str
-) -> Result<GeneratedTotp, CommonError> where M: MongoDaoTyped {
+) -> Result<GeneratedTotp, CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     // Generate a new temporary TOTP for user_id
     let secret = Secret::generate_secret();
 

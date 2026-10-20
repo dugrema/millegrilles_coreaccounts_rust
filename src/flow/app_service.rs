@@ -1,5 +1,4 @@
 use crate::constants::*;
-use crate::document_encryption::DocumentEncryptionService;
 use crate::external::mongo::*;
 use crate::external::mq::*;
 use crate::flow::backup::process_backup;
@@ -22,6 +21,7 @@ use millegrilles_common_rust::v3::impls::backup_restorer::RestorationState;
 use millegrilles_common_rust::v3::impls::messaging_service::MessagingServiceImpl;
 use millegrilles_common_rust::v3::{BackupService, ChiffrageService, ConfigService, PkiService};
 use std::sync::Arc;
+use millegrilles_common_rust::v3::facades::document_encryption_service::DocumentEncryptionServiceImpl;
 
 /// Handles queue consumer threads, calls individual routing methods
 pub struct ApplicationService {
@@ -32,7 +32,7 @@ pub struct ApplicationService {
     transaction: Arc<AccountsTransactionService>,
     mongo: Arc<MongoDaoImpl>,
     backup: Arc<dyn BackupService>,
-    document_encryption: Arc<DocumentEncryptionService>,
+    document_encryption: Arc<DocumentEncryptionServiceImpl>,
 }
 
 impl ApplicationService {
@@ -44,7 +44,7 @@ impl ApplicationService {
         transaction: Arc<AccountsTransactionService>,
         mongo: Arc<MongoDaoImpl>,
         backup: Arc<dyn BackupService>,
-        document_encryption: Arc<DocumentEncryptionService>,
+        document_encryption: Arc<DocumentEncryptionServiceImpl>,
     ) -> Self {
         Self {
             pki,

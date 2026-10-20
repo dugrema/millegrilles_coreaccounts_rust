@@ -21,7 +21,8 @@ use millegrilles_common_rust::v3::impls::messaging_service::MessagingServiceImpl
 use millegrilles_common_rust::v3::impls::security_service::SecurityServiceImpl;
 use millegrilles_common_rust::v3::{ChiffrageService, ConfigService};
 use std::sync::Arc;
-use crate::document_encryption::DocumentEncryptionService;
+use millegrilles_common_rust::v3::facades::document_encryption_service::DocumentEncryptionServiceImpl;
+use crate::constants::DOMAIN_NAME;
 use crate::external::mongo::*;
 
 pub struct AppContext {
@@ -63,7 +64,7 @@ impl AppContext {
 
         let filehost = Arc::new(FilehostServiceImpl::new(config.clone(), format.clone(), outbound.clone()));
 
-        let document_encryption = Arc::new(DocumentEncryptionService::new(security.clone(), outbound.clone()));
+        let document_encryption = Arc::new(DocumentEncryptionServiceImpl::new(security.clone(), outbound.clone(), DOMAIN_NAME));
 
         // List data tables (excluding redolog and tracking). They get truncated on restore (when not resuming).
         let data_tables = vec![

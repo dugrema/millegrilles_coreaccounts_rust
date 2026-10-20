@@ -5,7 +5,7 @@ mod models;
 mod state;
 mod error;
 pub mod auth;
-mod document_encryption;
+// mod document_encryption;
 
 use clap::Parser;
 use clap_derive::Parser;

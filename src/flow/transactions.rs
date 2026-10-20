@@ -11,7 +11,7 @@ use millegrilles_common_rust::mongo_dao::MongoDao;
 use millegrilles_common_rust::mongodb::ClientSession;
 use millegrilles_common_rust::mongodb::options::{DeleteManyModel, InsertOneModel, UpdateOneModel, WriteModel};
 use millegrilles_common_rust::serde_json::Value;
-use millegrilles_common_rust::tracing::{debug, error, warn};
+use millegrilles_common_rust::tracing::{debug, warn};
 use millegrilles_common_rust::v3::impls::transaction_service::TransactionServiceImpl;
 use millegrilles_common_rust::v3::models::{TransactionOperationAggregator, TransactionWrapper};
 use millegrilles_common_rust::v3::{ConfigService, FormatService, TransactionRouter, TransactionService};
