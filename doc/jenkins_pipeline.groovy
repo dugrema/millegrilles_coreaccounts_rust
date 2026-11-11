@@ -5,8 +5,8 @@ pipeline {
         string(defaultValue: 'master', name: 'BRANCH')
         string(defaultValue: '2026.7', name: 'VERSION')
         string(defaultValue: 'jenkins-maple', name: 'CREDENTIALS_ID')
-        string(defaultValue: 'ssh://git.maple.maceroc.com/git/millegrilles_coreaccounts_rust', name: 'GIT_URL')
-        string(defaultValue: 'vmhost2.maple.maceroc.com/millegrilles/coreaccounts_rust', name: 'DOCKER_IMAGE')
+        string(defaultValue: 'ssh://git@git.maple.maceroc.com/git/millegrilles_coreaccounts_rust', name: 'GIT_URL')
+        string(defaultValue: 'nexus.maple.maceroc.com/docker_millegrilles/millegrilles/coreaccounts_rust', name: 'DOCKER_IMAGE')
     }
 
     environment {
