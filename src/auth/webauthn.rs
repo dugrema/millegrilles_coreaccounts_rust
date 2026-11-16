@@ -292,9 +292,8 @@ pub async fn prepare_webauthn_authentication<M>(
         let valeur_challenge =  {
             let mut buffer_random = [0u8; 32];
             openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
-            buffer_random.to_vec()
-            // let challenge = buffer_random.to_vec();
-            // Base64UrlSafeData::from(challenge)
+            // buffer_random.to_vec()
+            Base64UrlSafeData::from(buffer_random.to_vec())
         };
         WebauthnChallengeRow::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
 
