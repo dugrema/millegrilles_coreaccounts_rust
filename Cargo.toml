@@ -5,10 +5,11 @@ edition = "2024"
 
 [dependencies]
 # millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", tag = "2026.6-release" }
-millegrilles_common_rust = { git = "https://github.com/dugrema/millegrilles_common_rust.git", branch = "master" }
+millegrilles_common_rust = { git = "https://git.maple.maceroc.com/millegrilles_common_rust.git", branch = "master" }
 # millegrilles_common_rust = { path = "/home/mathieu/RustroverProjects/millegrilles_common_rust" }
 
 serde = { version = "1.0.229", features = ["derive"] }
+serde_as = "0.0.1"
 
 # CLI parsing for restore
 clap = "4.6.7"
@@ -16,5 +17,5 @@ clap_derive = "4.6.7"
 rpassword = "7.5.4"
 
 # Authentication tools
-webauthn-rs = { "version" = "0.4.8", "features" = ["danger-allow-state-serialisation"] }
-totp-rs = { "version" = "5.7.2", features = ["default", "gen_secret", "qr", "serde_support", "zeroize"] }
+webauthn-rs = { "version" = "0.6.2", "features" = ["danger-allow-state-serialisation"] }
+totp-rs = { "version" = "6.0.0", features = ["default", "gen_secret", "qr", "serde", "zeroize"] }

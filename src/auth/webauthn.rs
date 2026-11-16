@@ -13,7 +13,7 @@ use millegrilles_common_rust::tracing::{debug, info};
 use millegrilles_common_rust::reqwest::Url;
 use millegrilles_common_rust::tokio_stream::StreamExt;
 use millegrilles_common_rust::mongo_serde::option_chrono_04_datetime;
-use millegrilles_common_rust::multihash::Code;
+use millegrilles_common_rust::multihash_codetable::Code;
 use millegrilles_common_rust::serde_json::{json, Value};
 use millegrilles_common_rust::chrono::serde::ts_seconds;
 use webauthn_rs::prelude::*;
@@ -292,8 +292,9 @@ pub async fn prepare_webauthn_authentication<M>(
         let valeur_challenge =  {
             let mut buffer_random = [0u8; 32];
             openssl::rand::rand_bytes(&mut buffer_random).expect("rand");
-            let challenge = buffer_random.to_vec();
-            Base64UrlSafeData::from(challenge)
+            buffer_random.to_vec()
+            // let challenge = buffer_random.to_vec();
+            // Base64UrlSafeData::from(challenge)
         };
         WebauthnChallengeRow::new_challenge_generique(user_id, hostname, valeur_challenge, "generique")
 

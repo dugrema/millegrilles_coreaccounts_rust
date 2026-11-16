@@ -25,7 +25,7 @@ use millegrilles_common_rust::v3::models::ErrorMessage;
 use millegrilles_common_rust::v3::{ConfigService, DocumentEncryptionService, PkiService};
 use millegrilles_common_rust::{bson, chrono, hex, serde_json};
 use serde::{Deserialize, Serialize};
-use totp_rs::TOTP;
+use totp_rs::Totp;
 use webauthn_rs::prelude::{Base64UrlSafeData, CreationChallengeResponse, PublicKeyCredential, RegisterPublicKeyCredential, RequestChallengeResponse};
 
 pub async fn process_command<M,E>(
@@ -434,7 +434,7 @@ async fn authenticate_totp<M,E>(
                 continue
             }
         };
-        let totp = match TOTP::from_url(&totp_url_string) {
+        let totp = match Totp::from_url(&totp_url_string) {
             Ok(inner) => inner,
             Err(e) => {
                 warn!("command_authenticate_otp Error loading TOTP URL for user_id:{}: {:?}", row.user_id, e);
@@ -442,15 +442,11 @@ async fn authenticate_totp<M,E>(
             }
         };
         match totp.check_current(command.totp_code.as_str()) {
-            Ok(true) => {
+            Some(_) => {
                 valid_totp = Some(row);    // Code is verified and valid
                 break
             }
-            Ok(false) => continue,
-            Err(e) => {
-                warn!("command_authenticate_otp Error validating TOTP code: {:?}", e);
-                continue
-            }
+            None => continue,
         }
     }
 
@@ -1135,7 +1131,7 @@ async fn register_otp<M,E>(
         None => return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(500, "Missing TOTP information")).await
     };
     let totp_url = String::from_utf8(totp_url_vec)?;
-    let totp = match TOTP::from_url(&totp_url) {
+    let totp = match Totp::from_url(&totp_url) {
         Ok(inner) => inner,
         Err(e) => {
             error!("TOTP URL loading error: {:?}", e);
@@ -1143,17 +1139,17 @@ async fn register_otp<M,E>(
         }
     };
 
-    let current_code = match totp.check_current(command.code.as_str()) {
-        Ok(inner) => inner,
-        Err(e) => {
-            error!("TOTP checking error - invalid time: {:?}", e);
+    let _current_code = match totp.check_current(command.code.as_str()) {
+        Some(step) => step,
+        None => {
+            error!("TOTP checking error - invalid time");
             return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "TOTP expired")).await
         }
     };
 
-    if ! current_code {
-        return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "TOTP invalid code")).await
-    }
+    // if ! current_code {
+    //     return outbound.respond(wrapper.delivery_info, ErrorMessage::err_code(403, "TOTP invalid code")).await
+    // }
 
     // Process new transaction
     let transaction_new = TransactionRegisterOtp {
