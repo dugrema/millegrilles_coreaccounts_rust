@@ -9,7 +9,6 @@ millegrilles_common_rust = { git = "https://git.maple.maceroc.com/millegrilles_c
 # millegrilles_common_rust = { path = "/home/mathieu/RustroverProjects/millegrilles_common_rust" }
 
 serde = { version = "1.0.229", features = ["derive"] }
-serde_as = "0.0.1"
 
 # CLI parsing for restore
 clap = "4.6.7"

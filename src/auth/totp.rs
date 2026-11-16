@@ -6,7 +6,7 @@ use millegrilles_common_rust::millegrilles_cryptographie::hachages::HachageCode;
 use millegrilles_common_rust::millegrilles_cryptographie::hachages::hacher_bytes;
 use millegrilles_common_rust::mongo_dao::MongoDaoTyped;
 use millegrilles_common_rust::v3::DocumentEncryptionService;
-use totp_rs::{Algorithm, Secret, TOTP};
+use totp_rs::{Algorithm, Secret, Builder};
 
 pub struct GeneratedTotp {
     pub challenge_hashvalue: String,
@@ -22,20 +22,22 @@ pub async fn generate_totp<M,E>(
     hostname: &str
 ) -> Result<GeneratedTotp, CommonError> where M: MongoDaoTyped, E: DocumentEncryptionService {
     // Generate a new temporary TOTP for user_id
-    let secret = Secret::generate_secret();
+    let secret = Secret::generate();
 
     // Save the user_id/secret for potential new TOTP credentials.
     let authenticator_id = format!("{}", username);
-    let totp = TOTP::new(
-        Algorithm::SHA512,
-        6,
-        1,
-        30,
-        secret.to_bytes().unwrap(),
-        Some(hostname.to_owned()),
-        authenticator_id
-    ).unwrap();
-    let totp_url = totp.get_url();
+    let totp = Builder::new()
+        .with_algorithm(Algorithm::SHA512)
+        .with_digits(6)
+        .with_skew(1)
+        .with_step_duration(30)
+        .with_secret(secret)
+        .with_issuer(hostname.into())
+        .with_account_name(authenticator_id)
+        .build()
+        .map_err(|e| CommonError::String(format!("Error creating TOTP instance: {:?}", e)))?;
+
+    let totp_url = totp.to_url().map_err(|e| CommonError::String(format!("Error parsing TOTP url: {:?}", e)))?;
     let challenge_hashvalue = base64_url::encode(&hacher_bytes(totp_url.as_bytes(), HachageCode::Blake2s256));
 
     // Encrypt the TOTP url, it contains the secret value
@@ -45,9 +47,9 @@ pub async fn generate_totp<M,E>(
     let collection = mongo.get_collection_typed::<WebauthnChallengeRow>(NOM_COLLECTION_CHALLENGES)?;
     collection.insert_one(challenge_row).await?;
 
-    let qr_base64 = totp.get_qr_base64()
+    let qr_base64 = totp.to_qr_base64()
         .map_err(|e| CommonError::String(format!("totp.get_qr_base64() Error: {:?}", e)))?;
-    let secret_base32 = totp.get_secret_base32();
+    let secret_base32 = totp.secret().to_base32();
 
     Ok(GeneratedTotp {challenge_hashvalue, secret_base32, qr_base64})
 }

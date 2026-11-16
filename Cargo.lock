@@ -3180,7 +3180,6 @@ dependencies = [
  "millegrilles_common_rust",
  "rpassword",
  "serde",
- "serde_as",
  "totp-rs",
  "webauthn-rs",
 ]
@@ -4889,12 +4888,6 @@ dependencies = [
  "ryu",
  "serde",
 ]
-
-[[package]]
-name = "serde_as"
-version = "0.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ee4afe4c5c3b69699c4267ae42b838e911466d7ca0005046adc93ac95bb16dd"
 
 [[package]]
 name = "serde_bytes"
